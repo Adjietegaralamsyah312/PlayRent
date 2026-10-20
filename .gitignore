@@ -1,0 +1,33 @@
+# Dependensi
+node_modules/
+
+# Database SQLite (termasuk sidecar WAL)
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+
+# Snapshot backup database (berisi data pelanggan, hash sandi, sesi)
+server/data/backups/
+
+# Hasil build frontend
+web/dist/
+.vite/
+
+# Environment (placeholder saja yang boleh masuk repo)
+.env
+.env.local
+.env.*.local
+
+# Log
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+
+# Droppings OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

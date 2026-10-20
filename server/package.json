@@ -1,0 +1,23 @@
+{
+  "name": "playrent-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PlayRent API — Express 5 + node:sqlite, no native deps",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "seed": "node src/seed.js",
+    "admin:bootstrap": "node src/admin-bootstrap.js",
+    "backup": "node src/backup.js",
+    "restore": "node src/restore.js",
+    "test": "node --test",
+    "test:smoke": "node test/smoke-manual.mjs"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "zod": "^3.23.8"
+  }
+}

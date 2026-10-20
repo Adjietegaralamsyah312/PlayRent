@@ -1,12 +1,14 @@
 # Simple workflow for deploying static content to GitHub Pages
+#
+# DISABLED (manual only). This is the boilerplate workflow GitHub offers when
+# a repository is created. It uploads the REPOSITORY ROOT as the Pages
+# artifact, so enabling it on push would publish the whole source tree
+# (including server/src) on the public site and race the real deploy.
+# The real deployment is .github/workflows/deploy.yml (Vite build -> Pages).
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
-
-  # Allows you to run this workflow manually from the Actions tab
+  # Manual only — the real deploy lives in deploy.yml.
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages

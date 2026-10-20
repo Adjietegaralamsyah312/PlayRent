@@ -2,12 +2,12 @@ import { createContext, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { settings as settingsApi } from './api';
 import { useAsync } from './useAsync';
-import type { Settings } from './types';
+import type { CustomerSettings } from './types';
 
 export const DEFAULT_WARN_MINUTES = [10, 5, 1];
 
 interface SettingsState {
-  settings: Settings | null;
+  settings: CustomerSettings | null;
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
@@ -18,9 +18,14 @@ const SettingsContext = createContext<SettingsState | null>(null);
 /**
  * Loaded once per authenticated app load (specs/sessions.md §3): `rules.warnMinutes`,
  * `payments.methods` and the money rules are read from here, never hardcoded.
+ *
+ * The provider wraps the WHOLE app, customers included, so it asks for the
+ * public shape — the server sends the internal overtime tariff and the payment
+ * methods to a super admin only (FE-019). The admin Settings page loads the
+ * full shape itself.
  */
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const { data, loading, error, reload } = useAsync(() => settingsApi.get(), []);
+  const { data, loading, error, reload } = useAsync(() => settingsApi.getPublic(), []);
   const value = useMemo<SettingsState>(
     () => ({ settings: data, loading, error, reload }),
     [data, loading, error, reload],

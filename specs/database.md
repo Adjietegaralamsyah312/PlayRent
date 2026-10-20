@@ -114,7 +114,8 @@ which is written entirely with `IF NOT EXISTS`, so re-running it is a no-op.
 - **Rollback:** additive-first. Never drop a column in the same migration that adds its replacement.
   Keep the old column until the new one is populated and the code no longer reads it.
 - **Reset:** delete the DB file and boot. `rm -f server/data/playrent.db server/data/playrent.db-wal server/data/playrent.db-shm`
-  (WAL mode keeps `-wal`/`-shm` sidecars) then `node src/seed.js`.
+  (WAL mode keeps `-wal`/`-shm` sidecars) then `node src/seed-schema.js` (production) or
+  `node src/seed.js` (demo).
 
 ## Migrasi v2 — role `superadmin` / `user`
 
@@ -157,11 +158,38 @@ migration): `users` 2 → 2, `auth_sessions` 4 → 4, `rental_sessions` 46 → 4
 `transactions.cashier_id` is still non-NULL on every row and still points at an existing user;
 `PRAGMA foreign_key_check` returns no rows and `PRAGMA integrity_check` returns `ok`.
 
+## Migrasi v4 — baris `business_settings`
+
+`business_settings` holds exactly one row (`id = 1`) and used to be created **only** by the demo
+seeder. A production database built with `migrate()` alone therefore had no settings row: every
+endpoint that reads the price rules (`/settings`, `/sessions/quote`, `/sessions`, `/bookings`)
+crashed with a `TypeError` and answered **500**. The only escape hatch was `npm run seed`, which
+injects 44 days of fake transactions and a live demo session into the real books.
+
+v4 appends one step to `MIGRATIONS` (`v4_businessSettings`): `INSERT OR IGNORE` of the single
+default row. The values live in one place — `DEFAULT_SETTINGS_ROW` in `server/src/lib/settings.js` —
+and are shared with the seeder, so a migrated DB and a seeded DB never disagree. `INSERT OR IGNORE`
+means an existing row is never overwritten.
+
+Two safety nets live next to it:
+
+- `lib/settings.js` → `getSettingsRow(db)` returns the defaults (`DEFAULT_RULES` from
+  `lib/pricing.js` + `business_name: 'PlayRent'`) when the row is missing, instead of throwing.
+- `lib/settings.js` → `updateSettingsRow(db, patch)` is an **UPSERT**
+  (`INSERT … ON CONFLICT(id) DO UPDATE`), so saving the settings on a row-less DB actually lands.
+
+`CURRENT_SCHEMA_VERSION` in `server/src/lib/db-backup.js` moved 3 → 4, and `inspectDatabase()`
+now also checks the columns the money path reads (`REQUIRED_COLUMNS`) — a DB that predates them
+is rejected at restore time instead of failing with a 500 later.
+
 ## Seeding
 
 `node src/seed.js` — idempotent; run it twice and every count is identical. Natural keys do the work:
 `INSERT OR IGNORE` on `consoles.code`, check-then-insert on `game_catalog.title` and `packages.name`,
 and the generated history is guarded by `notes = 'seed-demo'`.
+
+`node src/seed-schema.js` (`npm run seed:schema`) is the **production** path: settings row +
+catalog only — **no** transactions, **no** live session, **no** bookings, **no** accounts.
 
 - **No account is created by the seed.** There is no `admin`/`admin123` and no `kasir`/`kasir123`
   any more — a hardcoded password in the source tree is a security hole, and the cashier role no
@@ -173,7 +201,8 @@ and the generated history is guarded by `notes = 'seed-demo'`.
   and `audit_logs.actor_name = 'Sistem'` — so receipts and reports still show who handled it.
 - 10 consoles `PS-01`…`PS-10` (PS4/PS5, Reguler/VIP, 8 000–25 000 IDR/h); `PS-10` is `maintenance`.
 - 14 popular titles, 4 duration packages, 1 `business_settings` row.
-- 45 finished sessions + 45 matching transactions spread over the last 45 days, peak-weighted to
-  16:00–23:00, mixed payment methods, integer rupiah.
+- 45 finished sessions + 45 matching transactions, 0–2 sessions per day across the last 44 days
+  (the RNG seed is fixed at `42`, so the result is deterministic; 31 of those 44 days are filled),
+  peak-weighted to 16:00–23:00, mixed payment methods, integer rupiah.
 - One active session on `PS-03` (`notes = 'seed-demo-live'`) so the live timer has something to show.
 - Two bookings: `confirmed` tomorrow 19:00 on `PS-01`, `pending` today 21:00 on `PS-08`. No overlap.

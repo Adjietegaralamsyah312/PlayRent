@@ -7,7 +7,7 @@ import { Card } from '../components/Card';
 import { EmptyState } from '../components/Feedback';
 import { Input, Select, Textarea } from '../components/Form';
 import { bookings, consoles } from '../lib/api';
-import { formatDurationShort, toJakartaDateStr } from '../lib/format';
+import { formatDurationShort, toId, toJakartaDateStr } from '../lib/format';
 import { useSettings } from '../lib/settings-context';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../lib/toast';
@@ -24,8 +24,9 @@ export function BookingNew() {
   const isAdmin = user?.role === 'superadmin';
 
   const units = useAsync(() => consoles.list({}), []);
-  const options = (units.data?.items ?? []).map((u) => ({ value: u.id, label: `${u.code} · ${u.consoleType} ${u.roomType}` }));
+  const options = (units.data?.items ?? []).map((u) => ({ value: String(u.id), label: `${u.code} · ${u.consoleType} ${u.roomType}` }));
 
+  // A <select> value is a string; the API wants the console id as a number.
   const [consoleId, setConsoleId] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerContact, setCustomerContact] = useState('');
@@ -41,11 +42,12 @@ export function BookingNew() {
   const minMinutes = settings?.rules.minDurationMinutes ?? 30;
 
   async function submit() {
-    if (!consoleId || !customerName.trim() || minutes < minMinutes) return;
+    const unitId = toId(consoleId);
+    if (!unitId || !customerName.trim() || minutes < minMinutes) return;
     setSubmitting(true);
     try {
       await bookings.create({
-        consoleId,
+        consoleId: unitId,
         customerName: customerName.trim(),
         customerContact: customerContact.trim() || undefined,
         bookingDate,

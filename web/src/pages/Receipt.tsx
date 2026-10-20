@@ -63,7 +63,12 @@ export function Receipt() {
               >
                 Buka tab baru
               </Button>
-              <Button iconLeft={<Printer className="size-4" aria-hidden="true" />} onClick={print}>
+              <Button
+                iconLeft={<Printer className="size-4" aria-hidden="true" />}
+                onClick={print}
+                // Printing before the frame is loaded prints a blank page (FE-022).
+                disabled={frameState !== 'loaded'}
+              >
                 Cetak
               </Button>
             </>

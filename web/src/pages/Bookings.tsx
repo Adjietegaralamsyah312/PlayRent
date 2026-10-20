@@ -10,6 +10,7 @@ import type { Column } from '../components/DataTable';
 import { EmptyState } from '../components/Feedback';
 import { Input, Textarea } from '../components/Form';
 import { ConfirmDialog, Modal } from '../components/Modal';
+import { Pagination } from '../components/Pagination';
 import { StatusBadge } from '../components/Badge';
 import { Tabs } from '../components/Tabs';
 import { bookings, consoles } from '../lib/api';
@@ -31,7 +32,7 @@ const TABS = [
 ];
 
 interface Draft {
-  id: string;
+  id: number;
   customerName: string;
   customerContact: string;
   startTime: string;
@@ -62,18 +63,36 @@ export function Bookings() {
   const [params, setParams] = useSearchParams();
   const date = params.get('date') ?? today();
   const [tab, setTab] = useState('all');
+  const [page, setPage] = useState(1);
 
-  const list = useAsync(() => bookings.list({ date }), [date]);
+  const showTimeline = isDesktop && view === 'jadwal';
+  // The timeline shows the whole day at once; the table is paged. The server
+  // caps a page at 100 rows, so the day is never cut silently (FE-011).
+  const limit = showTimeline ? 100 : 20;
+  // 'expired' is a computed status (a confirmed slot whose start has passed) —
+  // the server cannot filter it, so it is filtered here from the day's
+  // confirmed bookings.
+  const statusQuery = tab === 'all' ? undefined : tab === 'expired' ? 'confirmed' : tab;
+
+  const list = useAsync(
+    () => (tab === 'expired'
+      ? Promise.resolve({ items: [] as Booking[], meta: { total: 0, page: 1, limit: 100 } })
+      : bookings.list({ date, status: statusQuery, page, limit })),
+    [date, tab, statusQuery, page, limit],
+  );
+  // The alert counts the whole day, not the page on screen.
+  const expiredAll = useAsync(() => bookings.list({ date, status: 'confirmed', limit: 100 }), [date]);
   const units = useAsync(() => consoles.list({}), []);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Booking | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
-  const codeOf = (consoleId: string) => units.data?.items.find((u) => u.id === consoleId)?.code ?? '—';
-  const all = list.data?.items ?? [];
-  const expired = all.filter((b) => effectiveBookingStatus(b) === 'expired');
+  const codeOf = (consoleId: number) => units.data?.items.find((u) => u.id === consoleId)?.code ?? '—';
+  const expiredRows = (expiredAll.data?.items ?? []).filter((b) => effectiveBookingStatus(b) === 'expired');
+  const raw = tab === 'expired' ? expiredRows : (list.data?.items ?? []);
+  const meta = list.data?.meta;
 
-  const rows = all
+  const rows = raw
     .filter((b) => {
       if (tab === 'all') return true;
       if (tab === 'expired') return effectiveBookingStatus(b) === 'expired';
@@ -81,11 +100,16 @@ export function Bookings() {
     })
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
-  const showTimeline = isDesktop && view === 'jadwal';
+  const totalBookings = tab === 'expired' ? expiredRows.length : (meta?.total ?? rows.length);
+  const listLoading = tab === 'expired' ? expiredAll.loading : list.loading;
+  const listError = tab === 'expired' ? expiredAll.error : list.error;
 
   function changeView(next: string) {
     setView(next as BookingView);
     localStorage.setItem(VIEW_KEY, next);
+    // The page size differs per view — start over so page 3 of 20 does not
+    // become page 3 of 100.
+    setPage(1);
   }
 
   /** Both the table row and a timeline block open the one booking modal. */
@@ -103,6 +127,13 @@ export function Bookings() {
 
   function setDate(next: string) {
     setParams({ date: next }, { replace: true });
+    setPage(1);
+  }
+
+  /** A new filter starts at page 1 — never land on an empty page. */
+  function setFilter(next: string) {
+    setTab(next);
+    setPage(1);
   }
 
   async function handleCheckIn(b: Booking) {
@@ -125,6 +156,7 @@ export function Bookings() {
       await bookings.update(b.id, { status: 'completed' });
       success('Booking ditandai selesai.');
       void list.reload();
+      void expiredAll.reload();
     } catch (e) {
       toastError(errorMessage(e));
     } finally {
@@ -139,6 +171,7 @@ export function Bookings() {
       success('Booking dibatalkan.');
       setCancelTarget(null);
       void list.reload();
+      void expiredAll.reload();
     } catch (e) {
       toastError(errorMessage(e));
     }
@@ -158,6 +191,7 @@ export function Bookings() {
       success('Booking diperbarui.');
       setDraft(null);
       void list.reload();
+      void expiredAll.reload();
     } catch (e) {
       toastError(errorMessage(e));
     }
@@ -236,19 +270,19 @@ export function Bookings() {
         </div>
       </PageSection>
 
-      {expired.length > 0 && (
+      {expiredRows.length > 0 && (
         <div role="status" className="mb-4 flex items-start gap-3 rounded-[var(--radius-lg)] border border-danger/50 bg-danger-soft px-4 py-3">
           <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger-text" aria-hidden="true" />
           <div className="flex-1">
             <p className="text-body-sm text-text">
-              {expired.length} booking kedaluwarsa pada tanggal ini. Tandai selesai atau batalkan.
+              {expiredRows.length} booking kedaluwarsa pada tanggal ini. Tandai selesai atau batalkan.
             </p>
             <Button
               size="sm"
               variant="secondary"
               onClick={() => {
-                setTab('expired');
-                success(`Menampilkan ${expired.length} booking kedaluwarsa.`);
+                setFilter('expired');
+                success(`Menampilkan ${expiredRows.length} booking kedaluwarsa.`);
               }}
             >
               Tampilkan
@@ -258,7 +292,7 @@ export function Bookings() {
       )}
 
       <PageSection>
-        <Tabs items={TABS} value={tab} onChange={setTab} />
+        <Tabs items={TABS} value={tab} onChange={setFilter} />
       </PageSection>
 
       {showTimeline ? (
@@ -269,12 +303,17 @@ export function Bookings() {
           <BookingTimeline
             consoles={units.data?.items ?? []}
             bookings={rows}
-            loading={list.loading || units.loading}
-            error={list.error ?? units.error}
+            loading={listLoading || units.loading}
+            error={listError ?? units.error}
             onSelect={openBooking}
-            onRetry={() => { void list.reload(); void units.reload(); }}
+            onRetry={() => { void list.reload(); void expiredAll.reload(); void units.reload(); }}
             onAddUnit={() => navigate('/unit')}
           />
+          {meta && meta.total > rows.length && (
+            <p className="mt-2 text-caption text-warning">
+              Menampilkan {rows.length} dari {meta.total} booking — buka tampilan Daftar untuk melihat sisanya.
+            </p>
+          )}
         </PageSection>
       ) : (
         <PageSection title="Daftar" description="Urut sesuai jam mulai.">
@@ -282,8 +321,8 @@ export function Bookings() {
             columns={columns}
             rows={rows}
             rowKey={(b) => b.id}
-            loading={list.loading}
-            error={list.error}
+            loading={listLoading}
+            error={listError}
             onRowClick={openBooking}
             rowLabel={(b) => b.customerName}
             empty={
@@ -328,13 +367,18 @@ export function Bookings() {
           <p className="mt-2 text-caption text-text-muted sm:hidden">
             Jadwal harian per unit tersedia di layar ≥ 768 px.
           </p>
+          {meta && meta.total > limit && (
+            <div className="mt-4">
+              <Pagination page={meta.page} limit={meta.limit} total={meta.total} onPageChange={setPage} />
+            </div>
+          )}
         </PageSection>
       )}
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-body-sm text-text-secondary">
-            Total {rows.length} booking pada {date}.
+            Total {totalBookings} booking pada {date}.
           </p>
           <Button variant="secondary" onClick={() => navigate(`/booking/baru?date=${date}`)}>Booking baru</Button>
         </div>

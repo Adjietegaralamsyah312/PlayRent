@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { AppError, ok } from '../lib/errors.js'
-import { parse, idParam } from '../lib/validate.js'
+import { parse, idParam, likePattern } from '../lib/validate.js'
 import { mapTransaction, mapSession, mapConsole, mapUser } from '../lib/mappers.js'
 import { requireAuth, requireSuperAdmin } from '../lib/auth.js'
 import { logAudit } from '../lib/audit.js'
@@ -13,9 +13,12 @@ const voidSchema = z.object({ reason: z.string().min(5, 'Isi alasan pembatalan (
 
 const rupiah = (n) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`
 
+// Canonical TransactionItem shape (fix-contract §1.2): {id, kind, description,
+// qty, unitPrice, lineTotal}. `description` <-> label, `qty` <-> quantity,
+// `lineTotal` <-> amount. The receipt renderer uses the same names.
 function itemsFor(db, txId) {
   return db.prepare('SELECT * FROM transaction_items WHERE transaction_id = ? ORDER BY id ASC').all(txId)
-    .map((r) => ({ id: r.id, kind: r.kind, label: r.label, quantity: r.quantity, unitPrice: r.unit_price, amount: r.amount }))
+    .map((r) => ({ id: r.id, kind: r.kind, description: r.label, qty: r.quantity, unitPrice: r.unit_price, lineTotal: r.amount }))
 }
 
 const METHOD_LABEL = { cash: 'Tunai', transfer: 'Transfer', qris: 'QRIS' }
@@ -32,9 +35,9 @@ function renderReceiptHtml(db, tx, { print }) {
   const line = (label, value, cls = '') => `<div class="row ${cls}"><span>${esc(label)}</span><span class="tnum">${esc(value)}</span></div>`
   const timeStr = formatJakarta(tx.created_at, { dateStyle: 'medium', timeStyle: 'short' })
   const rows = items.map((it) => (
-    `<div class="item"><div class="item-label">${esc(it.label)}</div>` +
-    `<div class="row"><span class="muted">${it.quantity} x ${esc(rupiah(it.unitPrice))}</span>` +
-    `<span class="tnum">${esc(rupiah(it.amount))}</span></div></div>`
+    `<div class="item"><div class="item-label">${esc(it.description)}</div>` +
+    `<div class="row"><span class="muted">${it.qty} x ${esc(rupiah(it.unitPrice))}</span>` +
+    `<span class="tnum">${esc(rupiah(it.lineTotal))}</span></div></div>`
   )).join('')
 
   return `<!doctype html>
@@ -114,8 +117,8 @@ function renderReceiptText(db, tx) {
   if (session) out.push(row('Durasi', `${session.billed_minutes ?? session.planned_minutes} menit`))
   out.push('-'.repeat(w))
   for (const it of items) {
-    out.push(it.label)
-    out.push(row(`  ${it.quantity} x ${rupiah(it.unitPrice)}`, rupiah(it.amount)))
+    out.push(it.description)
+    out.push(row(`  ${it.qty} x ${rupiah(it.unitPrice)}`, rupiah(it.lineTotal)))
   }
   out.push('-'.repeat(w))
   out.push(row('Subtotal', rupiah(tx.subtotal)))
@@ -149,7 +152,7 @@ export default function transactionsRoutes(db) {
     else if (status === 'completed') where.push("status = 'completed'")
     else if (status === 'unpaid') where.push("payment_status = 'unpaid'")
     else if (status === 'paid') where.push("payment_status = 'paid'")
-    if (q) { where.push('(number LIKE ? OR customer_name LIKE ? OR console_code LIKE ?)'); params.push(`%${q}%`, `%${q}%`, `%${q}%`) }
+    if (q) { where.push("(number LIKE ? ESCAPE '\\' OR customer_name LIKE ? ESCAPE '\\' OR console_code LIKE ? ESCAPE '\\')"); params.push(likePattern(q), likePattern(q), likePattern(q)) }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
     const aggParams = [...params]

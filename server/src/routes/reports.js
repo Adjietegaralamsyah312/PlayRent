@@ -1,13 +1,33 @@
 import { Router } from 'express'
-import { ok } from '../lib/errors.js'
+import { ok, AppError } from '../lib/errors.js'
 import { requireAuth, requireSuperAdmin } from '../lib/auth.js'
 import { toCsv } from '../lib/csv.js'
+import { mapTransaction } from '../lib/mappers.js'
 import {
-  jakartaDateStr, jakartaDayRangeUtc, isoWeekStr, jakartaMonthStr, formatJakarta,
+  jakartaDateStr, jakartaDayRangeUtc, isoWeekStr, jakartaMonthStr, formatJakarta, periodLabels,
 } from '../lib/time.js'
 
 const OPERATING_HOURS_PER_DAY = 16 // 08:00–24:00, per specs/reports.md
 const validYmd = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+
+/** CSV export types (BE-008). Anything else -> 400 VALIDATION_ERROR. */
+const EXPORT_TYPES = ['sessions', 'transactions', 'units', 'daily', 'weekly', 'monthly', 'payments']
+
+const money = (n) => String(n ?? 0)
+
+const TRANSACTION_COLUMNS = [
+  { key: 'number', label: 'No. Transaksi' },
+  { key: 'createdAt', label: 'Waktu', value: (r) => formatJakarta(r.created_at, { dateStyle: 'short', timeStyle: 'short' }) },
+  { key: 'customerName', label: 'Pelanggan', value: (r) => r.customer_name },
+  { key: 'consoleCode', label: 'Unit', value: (r) => r.console_code },
+  { key: 'subtotal', label: 'Subtotal', value: (r) => money(r.subtotal) },
+  { key: 'extraCharge', label: 'Biaya Tambahan', value: (r) => money(r.extra_charge) },
+  { key: 'discount', label: 'Diskon', value: (r) => money(r.discount) },
+  { key: 'total', label: 'Total', value: (r) => money(r.total) },
+  { key: 'method', label: 'Metode', value: (r) => r.payment_method },
+  { key: 'paymentStatus', label: 'Status Bayar', value: (r) => r.payment_status },
+  { key: 'status', label: 'Status', value: (r) => r.status },
+]
 
 function resolveRange(query) {
   const today = jakartaDateStr()
@@ -21,6 +41,70 @@ function resolveRange(query) {
 
 const labelOf = (bucket, iso) =>
   bucket === 'week' ? isoWeekStr(iso) : bucket === 'month' ? jakartaMonthStr(iso) : jakartaDateStr(iso)
+
+const EMPTY_BUCKET = () => ({ date: '', revenue: 0, transactions: 0, sessions: 0, minutes: 0 })
+
+/**
+ * One row per period in [from, to] — empty periods included with zeros
+ * (BE-007). A quiet day must be visible, otherwise the report cannot tell
+ * "closed" apart from "missing" and the totals look complete when they are not.
+ */
+function bucketItems(db, bucket, from, to, startIso, endIso) {
+  const txRows = db.prepare(
+    `SELECT created_at, total FROM transactions
+      WHERE status != 'void' AND payment_status = 'paid' AND created_at >= ? AND created_at <= ?`,
+  ).all(startIso, endIso)
+  const sessRows = db.prepare(
+    `SELECT started_at, IFNULL(billed_minutes, planned_minutes) AS minutes FROM rental_sessions
+      WHERE status != 'void' AND started_at >= ? AND started_at <= ?`,
+  ).all(startIso, endIso)
+
+  const buckets = new Map()
+  for (const label of periodLabels(from, to, bucket)) buckets.set(label, { ...EMPTY_BUCKET(), date: label })
+  const get = (label) => {
+    if (!buckets.has(label)) buckets.set(label, { ...EMPTY_BUCKET(), date: label })
+    return buckets.get(label)
+  }
+  for (const row of txRows) {
+    const b = get(labelOf(bucket, row.created_at))
+    b.revenue += row.total
+    b.transactions += 1
+  }
+  for (const row of sessRows) {
+    const b = get(labelOf(bucket, row.started_at))
+    b.sessions += 1
+    b.minutes += row.minutes || 0
+  }
+  return [...buckets.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+}
+
+/** Rows + totals of GET /reports/payments, shared with the CSV export. */
+function paymentsData(db, query, startIso, endIso) {
+  const where = ['created_at >= ?', 'created_at <= ?']
+  const params = [startIso, endIso]
+  const { method, status } = query
+  if (['cash', 'transfer', 'qris'].includes(method)) { where.push('payment_method = ?'); params.push(method) }
+  if (['paid', 'unpaid', 'void'].includes(status)) { where.push('payment_status = ?'); params.push(status) }
+  const rows = db.prepare(
+    `SELECT * FROM transactions WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC`,
+  ).all(...params)
+  // Canonical shape (fix-contract §1.1): the same names as GET /transactions
+  // — count/gross/paid/outstanding — plus `voided` as a COUNT of void rows.
+  const totals = {
+    count: rows.length,
+    gross: 0, paid: 0, outstanding: 0, voided: 0,
+    byMethod: { cash: { count: 0, total: 0 }, transfer: { count: 0, total: 0 }, qris: { count: 0, total: 0 } },
+  }
+  for (const row of rows) {
+    if (row.status === 'void') { totals.voided += 1; continue }
+    totals.gross += row.total
+    if (row.payment_status === 'paid') totals.paid += row.total
+    else if (row.payment_status === 'unpaid') totals.outstanding += row.total
+    const m = totals.byMethod[row.payment_method]
+    if (m) { m.count += 1; m.total += row.total }
+  }
+  return { rows, totals }
+}
 
 export default function reportsRoutes(db) {
   const r = Router()
@@ -55,34 +139,8 @@ export default function reportsRoutes(db) {
   })
 
   const bucketReport = (bucket) => (req, res) => {
-    const { startIso, endIso } = resolveRange(req.query)
-    const txRows = db.prepare(
-      `SELECT created_at, total FROM transactions
-        WHERE status != 'void' AND payment_status = 'paid' AND created_at >= ? AND created_at <= ?`,
-    ).all(startIso, endIso)
-    const sessRows = db.prepare(
-      `SELECT started_at, IFNULL(billed_minutes, planned_minutes) AS minutes FROM rental_sessions
-        WHERE status != 'void' AND started_at >= ? AND started_at <= ?`,
-    ).all(startIso, endIso)
-
-    const buckets = new Map()
-    const get = (label) => {
-      const cur = buckets.get(label) || { date: label, revenue: 0, transactions: 0, sessions: 0, minutes: 0 }
-      buckets.set(label, cur)
-      return cur
-    }
-    for (const row of txRows) {
-      const b = get(labelOf(bucket, row.created_at))
-      b.revenue += row.total
-      b.transactions += 1
-    }
-    for (const row of sessRows) {
-      const b = get(labelOf(bucket, row.started_at))
-      b.sessions += 1
-      b.minutes += row.minutes || 0
-    }
-    const items = [...buckets.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-    return ok(res, { items })
+    const { from, to, startIso, endIso } = resolveRange(req.query)
+    return ok(res, { items: bucketItems(db, bucket, from, to, startIso, endIso) })
   }
 
   r.get('/daily', bucketReport('day'))
@@ -117,55 +175,28 @@ export default function reportsRoutes(db) {
 
   r.get('/payments', (req, res) => {
     const { startIso, endIso } = resolveRange(req.query)
-    const { method, status } = req.query
-    const where = ['created_at >= ?', 'created_at <= ?']
-    const params = [startIso, endIso]
-    if (['cash', 'transfer', 'qris'].includes(method)) { where.push('payment_method = ?'); params.push(method) }
-    if (['paid', 'unpaid', 'void'].includes(status)) { where.push('payment_status = ?'); params.push(status) }
-    const whereSql = `WHERE ${where.join(' AND ')}`
-    const rows = db.prepare(`SELECT * FROM transactions ${whereSql} ORDER BY created_at DESC, id DESC`).all(...params)
-    const totals = {
-      count: rows.length,
-      recorded: 0, outstanding: 0, voided: 0,
-      subtotal: 0,
-      byMethod: { cash: { count: 0, total: 0 }, transfer: { count: 0, total: 0 }, qris: { count: 0, total: 0 } },
-    }
-    for (const row of rows) {
-      if (row.status === 'void') { totals.voided += row.total; continue }
-      if (row.payment_status === 'paid') { totals.recorded += row.total; totals.subtotal += row.total }
-      else totals.outstanding += row.total
-      const m = totals.byMethod[row.payment_method]
-      if (m) { m.count += 1; m.total += row.total }
-    }
-    const items = rows.map((row) => ({
-      id: row.id, at: row.created_at, number: row.number, customerName: row.customer_name,
-      consoleCode: row.console_code, method: row.payment_method, status: row.payment_status,
-      total: row.total,
-    }))
-    return ok(res, { items, totals })
+    const { rows, totals } = paymentsData(db, req.query, startIso, endIso)
+    return ok(res, { items: rows.map(mapTransaction), totals })
   })
 
   r.get('/export.csv', (req, res) => {
-    const type = ['sessions', 'transactions', 'units', 'daily'].includes(req.query.type) ? req.query.type : 'transactions'
+    const type = String(req.query.type ?? '')
+    // BE-008: an unknown type must fail loudly. A silent fallback to
+    // `transactions` is what made "Export Mingguan" hand the operator a raw
+    // transaction list without anybody noticing.
+    if (!EXPORT_TYPES.includes(type)) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        `Jenis ekspor "${type || '(kosong)'}" tidak dikenal. Pilihan: ${EXPORT_TYPES.join(', ')}`,
+      )
+    }
     const { from, to, startIso, endIso, days } = resolveRange(req.query)
-    const money = (n) => String(n ?? 0)
     let rows = []
     let columns = []
     if (type === 'transactions') {
       rows = db.prepare('SELECT * FROM transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at ASC').all(startIso, endIso)
-      columns = [
-        { key: 'number', label: 'No. Transaksi' },
-        { key: 'createdAt', label: 'Waktu', value: (r) => formatJakarta(r.created_at, { dateStyle: 'short', timeStyle: 'short' }) },
-        { key: 'customerName', label: 'Pelanggan', value: (r) => r.customer_name },
-        { key: 'consoleCode', label: 'Unit', value: (r) => r.console_code },
-        { key: 'subtotal', label: 'Subtotal', value: (r) => money(r.subtotal) },
-        { key: 'extraCharge', label: 'Biaya Tambahan', value: (r) => money(r.extra_charge) },
-        { key: 'discount', label: 'Diskon', value: (r) => money(r.discount) },
-        { key: 'total', label: 'Total', value: (r) => money(r.total) },
-        { key: 'method', label: 'Metode', value: (r) => r.payment_method },
-        { key: 'paymentStatus', label: 'Status Bayar', value: (r) => r.payment_status },
-        { key: 'status', label: 'Status', value: (r) => r.status },
-      ]
+      columns = TRANSACTION_COLUMNS
     } else if (type === 'sessions') {
       rows = db.prepare(
         `SELECT s.*, c.code AS console_code FROM rental_sessions s JOIN consoles c ON c.id = s.console_id
@@ -205,18 +236,15 @@ export default function reportsRoutes(db) {
         { key: 'revenue', label: 'Pendapatan', value: (r) => money(r.revenue) },
         { key: 'utilizationPct', label: 'Utilisasi (%)' },
       ]
+    } else if (type === 'payments') {
+      // Same dataset as GET /reports/payments (BE-008) — not the transactions list.
+      rows = paymentsData(db, req.query, startIso, endIso).rows
+      columns = TRANSACTION_COLUMNS
     } else {
-      const txRows = db.prepare(
-        `SELECT created_at, total FROM transactions WHERE status != 'void' AND payment_status = 'paid' AND created_at >= ? AND created_at <= ?`,
-      ).all(startIso, endIso)
-      const sessRows = db.prepare(
-        `SELECT started_at, IFNULL(billed_minutes, planned_minutes) AS minutes FROM rental_sessions WHERE status != 'void' AND started_at >= ? AND started_at <= ?`,
-      ).all(startIso, endIso)
-      const buckets = new Map()
-      const get = (label) => { const c = buckets.get(label) || { date: label, revenue: 0, transactions: 0, sessions: 0, minutes: 0 }; buckets.set(label, c); return c }
-      for (const row of txRows) { const b = get(jakartaDateStr(row.created_at)); b.revenue += row.total; b.transactions += 1 }
-      for (const row of sessRows) { const b = get(jakartaDateStr(row.started_at)); b.sessions += 1; b.minutes += row.minutes || 0 }
-      rows = [...buckets.values()].sort((a, b) => (a.date < b.date ? -1 : 1))
+      // daily | weekly | monthly — the very same buckets the report endpoints
+      // return, empty periods included (BE-007 + BE-008).
+      const bucket = type === 'weekly' ? 'week' : type === 'monthly' ? 'month' : 'day'
+      rows = bucketItems(db, bucket, from, to, startIso, endIso)
       columns = [
         { key: 'date', label: 'Tanggal' },
         { key: 'revenue', label: 'Pendapatan', value: (r) => money(r.revenue) },

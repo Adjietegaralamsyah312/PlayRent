@@ -9,6 +9,31 @@ bagian **Kalau lupa password Super Admin** di bawah.
 
 ---
 
+## 0. Instalasi pertama (sekali saja)
+
+Aplikasi baru bisa dipakai setelah **basis datanya disiapkan** dan **akun Super Admin
+dibuat**. Dua perintah ini, dari folder `server/`:
+
+```sh
+cd server
+npm run seed:schema      # 1. buat basis data + katalog (unit, game, paket, pengaturan)
+npm run admin:bootstrap  # 2. buat akun Super Admin (password Anda sendiri)
+```
+
+| Perintah | Yang mengisi | Untuk |
+| --- | --- | --- |
+| `npm run seed:schema` | Unit PS, daftar game, paket durasi, aturan harga | **Instalasi produksi** |
+| `npm run seed` | Semua di atas **+ 45 transaksi fiktif 44 hari + sesi demo** | Hanya demo/percobaan |
+
+> **Pakai `seed:schema`, bukan `seed`, untuk usaha yang sungguhan.** `npm run seed` mengisi
+> laporan dengan pendapatan yang tidak pernah terjadi dan satu unit terisi sesi demo,
+> sehingga unit itu tidak bisa disewakan.
+
+Kalau ini pertama kalinya dan Anda ingin **melihat** aplikasi berisi contoh, `npm run seed`
+boleh dipakai — tapi database itu harus di-reset sebelum dipakai untuk transaksi nyata.
+
+---
+
 ## Dua jenis akun
 
 | Peran | Siapa | Hak akses |
@@ -177,6 +202,8 @@ akun Super Admin.
 | Masalah | Yang dilakukan |
 | --- | --- |
 | Tidak bisa login | Pastikan username & kata sandi benar; setelah 5 kali gagal salah, tunggu 15 menit. |
+| Dashboard & laporan kosong semua | Basis data belum disiapkan. Dari folder `server/`, jalankan `npm run seed:schema` lalu jalankan ulang server (bagian 0). |
+| Laporan berisi pendapatan yang tidak pernah terjadi | Basis data diisi seeder demo. Hentikan server, hapus `server/data/playrent.db` (beserta `-wal`/`-shm`), lalu jalankan `npm run seed:schema` dan `npm run admin:bootstrap` ulang. **Hapus backup lama juga** kalau tidak mau ribet. |
 | Lupa sandi Super Admin | Reset dari terminal: `npm run admin:bootstrap -- --force` (bagian 8). |
 | Terlempar ke halaman login | Sesi kedaluwarsa. Login lagi — data tidak hilang. |
 | Tombol Mulai sesi ditolak | Unit sedang dipakai/dipesan orang lain. Pilih unit lain. |

@@ -36,25 +36,29 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): Async<T
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(fn);
   latest.current = fn;
-  const alive = useRef(true);
+  // Request counter — "latest request wins". Without it a slow response for an
+  // old filter overwrites the fresh one (FE-005).
+  const seq = useRef(0);
 
   const reload = useCallback(async () => {
-    alive.current = true;
+    const mine = ++seq.current;
     setLoading(true);
     setError(null);
     try {
       const result = await latest.current();
-      if (alive.current) setData(result);
+      if (mine === seq.current) setData(result);
     } catch (e) {
-      if (alive.current) setError(errorMessage(e));
+      if (mine === seq.current) setError(errorMessage(e));
     } finally {
-      if (alive.current) setLoading(false);
+      if (mine === seq.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void reload();
-    return () => { alive.current = false; };
+    // Invalidates whatever is still in flight when the deps change (or on
+    // unmount) — a stale response must never write state.
+    return () => { seq.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

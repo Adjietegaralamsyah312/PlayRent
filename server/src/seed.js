@@ -7,6 +7,7 @@
 // Run: node src/seed.js
 import { withTx, migrate } from './db.js'
 import db from './db.js'
+import { DEFAULT_SETTINGS_ROW } from './lib/settings.js'
 
 const nowIso = () => new Date().toISOString()
 
@@ -29,7 +30,7 @@ const jakartaNoon = (offsetDays) => new Date(Date.now() - offsetDays * 86400000)
 
 // ---------------------------------------------------------------------------
 
-function insertConsoles(tx) {
+export function insertConsoles(tx) {
   const stmt = tx.prepare(
     `INSERT OR IGNORE INTO consoles
      (code, console_type, room_type, controllers, hourly_rate, status, condition_note, is_active, created_at, updated_at)
@@ -53,7 +54,7 @@ function insertConsoles(tx) {
   }
 }
 
-function insertGames(tx) {
+export function insertGames(tx) {
   const games = [
     ['EA SPORTS FC 25', 'PS5', 'Sports', 2, 'Rak A1'],
     ['eFootball 2025', 'both', 'Sports', 2, 'Rak A2'],
@@ -81,7 +82,7 @@ function insertGames(tx) {
   }
 }
 
-function insertPackages(tx) {
+export function insertPackages(tx) {
   const rows = [
     ['Paket 1 Jam', 60, 8000, null],
     ['Paket 2 Jam', 120, 15000, null],
@@ -98,7 +99,10 @@ function insertPackages(tx) {
   }
 }
 
-function insertSettings(tx) {
+// The settings row. Same defaults as the v4 migration (one source of truth:
+// lib/settings.js) so a migrated DB and a seeded DB never disagree.
+export function insertSettings(tx) {
+  const d = DEFAULT_SETTINGS_ROW
   tx.prepare(
     `INSERT OR IGNORE INTO business_settings
      (id, business_name, address, phone, receipt_footer, tax_note,
@@ -106,12 +110,10 @@ function insertSettings(tx) {
       default_hourly_rate, warn_minutes_json, payment_methods_json, updated_at)
      VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
-    'PlayRent Gaming Lounge',
-    'Jl. Merdeka No. 45, Bandung, Jawa Barat',
-    '0812-3456-7890',
-    'Terima kasih telah bermain di PlayRent!',
-    'Harga sudah termasuk pajak.',
-    30, 15, 12000, 5, 15000, '[10,5,1]', '["cash","transfer","qris"]', nowIso(),
+    d.business_name, d.address, d.phone, d.receipt_footer, d.tax_note,
+    d.min_duration_minutes, d.rounding_minutes, d.overtime_rate_per_hour,
+    d.overtime_grace_minutes, d.default_hourly_rate, d.warn_minutes_json,
+    d.payment_methods_json, nowIso(),
   )
 }
 

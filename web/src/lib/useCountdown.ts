@@ -36,7 +36,9 @@ export function useCountdown(endsAt: string | null | undefined, warnMinutes: num
   const minutes = remainingSeconds / 60;
   const warn = [...warnMinutes].sort((a, b) => b - a); // [10,5,1]
   const top = warn[0] ?? 10;
-  const second = warn[1] ?? 5;
+  // "Critical" is the SMALLEST configured threshold — with a single threshold
+  // of 3 minutes, critical must not fall back to 5 (FE-017).
+  const second = warn[warn.length - 1] ?? warn[0] ?? 5;
 
   let severity: CountdownSeverity = 'ok';
   if (remainingSeconds < 0) severity = 'overdue';

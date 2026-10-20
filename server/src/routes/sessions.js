@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { AppError, ok, created, isUniqueViolation } from '../lib/errors.js'
-import { parse, idParam } from '../lib/validate.js'
+import { parse, idParam, likePattern } from '../lib/validate.js'
 import { mapConsole, mapSession, mapTransaction, sessionById } from '../lib/mappers.js'
 import { requireAuth, requireSuperAdmin } from '../lib/auth.js'
 import { logAudit } from '../lib/audit.js'
@@ -14,9 +14,26 @@ import {
 
 const DURATION_MAX = 1440
 
+// BE-010: a client clock that is off by hours would otherwise inflate the
+// overtime bill. The window is deliberately wide (24 h back / 5 min ahead) so
+// a legit late-night entry still works.
+const STARTED_AT_MAX_PAST_MS = 24 * 60 * 60 * 1000
+const STARTED_AT_MAX_FUTURE_MS = 5 * 60 * 1000
+
+const startedAtInWindow = (v) => {
+  const t = Date.parse(v)
+  const now = Date.now()
+  return t >= now - STARTED_AT_MAX_PAST_MS && t <= now + STARTED_AT_MAX_FUTURE_MS
+}
+const STARTED_AT_WINDOW_MSG = 'Waktu mulai maksimal 24 jam ke belakang dan 5 menit ke depan'
+
+// Quote accepts EITHER a running session (sessionId) OR a plan
+// (consoleId + durationMinutes). Both shapes are optional at the schema
+// level; the handler enforces which one is required.
 const quoteSchema = z.object({
-  consoleId: z.coerce.number().int().positive(),
-  durationMinutes: z.coerce.number().int().positive().max(DURATION_MAX, 'Durasi maksimal 1440 menit'),
+  sessionId: z.coerce.number().int().positive().optional(),
+  consoleId: z.coerce.number().int().positive().optional(),
+  durationMinutes: z.coerce.number().int().positive().max(DURATION_MAX, 'Durasi maksimal 1440 menit').optional(),
   startedAt: z.string().datetime().optional(),
   extraMinutes: z.coerce.number().int().min(0).max(DURATION_MAX).optional(),
 }).strict()
@@ -27,7 +44,7 @@ const startSchema = z.object({
   customerContact: z.string().max(40).optional().nullable(),
   durationMinutes: z.coerce.number().int().positive().max(DURATION_MAX, 'Durasi maksimal 1440 menit'),
   notes: z.string().max(300).optional().nullable(),
-  startedAt: z.string().datetime().optional(),
+  startedAt: z.string().datetime().refine(startedAtInWindow, STARTED_AT_WINDOW_MSG).optional(),
 }).strict()
 
 const extendSchema = z.object({
@@ -89,18 +106,46 @@ export default function sessionsRoutes(db) {
   r.use(requireAuth, requireSuperAdmin)
 
   // S1 — pure price preview, no writes.
+  // Two paths (fix-contract §2):
+  //   sessionId -> preview of a RUNNING session: the rate snapshot and the
+  //                 real elapsed time come from the DB row, so the preview is
+  //                 the same money `finish` will charge.
+  //   plan      -> consoleId + durationMinutes: a plan that has not started.
+  // `extraMinutes` always extends the PLANNED duration; overtime only ever
+  // comes from actual > planned.
   r.post('/quote', (req, res) => {
     const body = parse(quoteSchema, req.body)
+    const rules = rulesFromRow(getSettingsRow(db))
+    const extra = body.extraMinutes || 0
+
+    if (body.sessionId !== undefined) {
+      const s = db.prepare('SELECT * FROM rental_sessions WHERE id = ?').get(body.sessionId)
+      if (!s) throw new AppError(404, 'SESSION_NOT_FOUND')
+      if (s.status !== 'active' && s.status !== 'overdue') throw new AppError(409, 'SESSION_NOT_ACTIVE')
+      const planned = s.planned_minutes + extra
+      const actual = minutesBetween(s.started_at, nowIso())
+      return ok(res, quote({ durationMinutes: planned, actualMinutes: actual, hourlyRate: s.rate_snapshot, rules }))
+    }
+
+    if (body.consoleId === undefined || body.durationMinutes === undefined) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'Kirim sessionId, atau consoleId + durationMinutes', [
+        { path: 'consoleId', message: 'Wajib diisi bila sessionId tidak diberikan' },
+        { path: 'durationMinutes', message: 'Wajib diisi bila sessionId tidak diberikan' },
+      ])
+    }
     const c = db.prepare('SELECT * FROM consoles WHERE id = ? AND is_active = 1').get(body.consoleId)
     if (!c) throw new AppError(404, 'CONSOLE_NOT_FOUND')
-    const rules = rulesFromRow(getSettingsRow(db))
     validateDuration(body.durationMinutes, rules)
-    const planned = body.durationMinutes + (body.extraMinutes || 0)
-    return ok(res, quote({ durationMinutes: planned, actualMinutes: planned, hourlyRate: c.hourly_rate, rules }))
+    const planned = body.durationMinutes + extra
+    const actual = body.startedAt ? Math.max(0, minutesBetween(body.startedAt, nowIso())) : planned
+    return ok(res, quote({ durationMinutes: planned, actualMinutes: actual, hourlyRate: c.hourly_rate, rules }))
   })
 
   // S2 — list + meta
   r.get('/', (req, res) => {
+    // BE-005: a late session must be marked before the filter runs, otherwise
+    // ?status=overdue is always empty and ?status=active hides late sessions.
+    markOverdue(db)
     const { status, consoleId, from, to, q } = req.query
     const page = Math.max(1, int(req.query.page) || 1)
     const limit = Math.min(100, Math.max(1, int(req.query.limit) || 20))
@@ -110,7 +155,7 @@ export default function sessionsRoutes(db) {
     if (consoleId) { where.push('s.console_id = ?'); params.push(int(consoleId)) }
     if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) { where.push('s.started_at >= ?'); params.push(jakartaDayRangeUtc(from).startIso) }
     if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) { where.push('s.started_at <= ?'); params.push(jakartaDayRangeUtc(to).endIso) }
-    if (q) { where.push('(c.code LIKE ? OR s.customer_name LIKE ?)'); params.push(`%${q}%`, `%${q}%`) }
+    if (q) { where.push("(c.code LIKE ? ESCAPE '\\' OR s.customer_name LIKE ? ESCAPE '\\')"); params.push(likePattern(q), likePattern(q)) }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
     const total = db.prepare(
       `SELECT COUNT(*) AS c FROM rental_sessions s JOIN consoles c ON c.id = s.console_id ${whereSql}`,
@@ -129,6 +174,7 @@ export default function sessionsRoutes(db) {
 
   // S3 — active board with server-computed remainingSeconds
   r.get('/active', (req, res) => {
+    markOverdue(db)
     const rows = db.prepare(
       `SELECT s.*, c.code AS console_code
          FROM rental_sessions s JOIN consoles c ON c.id = s.console_id
@@ -247,7 +293,9 @@ export default function sessionsRoutes(db) {
           if (amountPaid < q.total) throw new AppError(400, 'INSUFFICIENT_PAYMENT')
           changeDue = amountPaid - q.total
         } else {
-          amountPaid = q.total
+          // BE-014: a transfer/qris records the amount actually received; the
+          // default is the exact total. There is no change for non-cash.
+          amountPaid = int(body.amountPaid) > 0 ? int(body.amountPaid) : q.total
           changeDue = 0
         }
 

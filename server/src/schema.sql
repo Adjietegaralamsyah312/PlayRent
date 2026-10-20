@@ -1,6 +1,22 @@
 -- PlayRent canonical schema. Idempotent: safe to run on every boot.
 -- Money = INTEGER rupiah. Time = ISO-8601 UTC TEXT (new Date().toISOString()).
 -- driver: node:sqlite DatabaseSync (no native deps).
+--
+-- ===========================================================================
+-- SNAPSHOT v1 — JANGAN DIEDIT.
+-- This file is migration step 1 (v1_schema) and is FROZEN: it has already
+-- shipped, so a DB that ran it will never run it again. Any change to the
+-- schema must be a NEW migration step appended to MIGRATIONS in src/db.js
+-- (v2_superadmin, v3_revokeInactiveSessions, v4_businessSettings, ...), never
+-- an edit here.
+--
+-- This snapshot is intentionally the ORIGINAL v1 shape and therefore differs
+-- from the live schema: `users.role` still allows ('admin','cashier') and
+-- `users.phone` / `bookings.customer_user_id` do not exist yet. Migration v2
+-- rebuilds `users` for the shipped roles ('superadmin','user') and adds both
+-- columns. The effective schema after migrating is what api-contract.md
+-- documents — not this file.
+-- ===========================================================================
 
 -- ---------------------------------------------------------------------------
 -- users

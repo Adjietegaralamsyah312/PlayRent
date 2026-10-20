@@ -24,7 +24,7 @@ export interface SortState { key: string; dir: 'asc' | 'desc' }
 export interface DataTableProps<T> {
   columns: Column<T>[];
   rows: T[];
-  rowKey: (row: T) => string;
+  rowKey: (row: T) => string | number;
   loading?: boolean;
   skeletonRows?: number;
   empty?: ReactNode;
@@ -34,8 +34,8 @@ export interface DataTableProps<T> {
   rowLabel?: (row: T) => string;
   rowActions?: (row: T) => ReactNode;
   selectable?: boolean;
-  selectedIds?: string[];
-  onSelectedIdsChange?: (ids: string[]) => void;
+  selectedIds?: (string | number)[];
+  onSelectedIdsChange?: (ids: (string | number)[]) => void;
   /** Sticky column header inside the table panel. On by default (DESIGN.md §6). */
   stickyHeader?: boolean;
   /** Optional controlled sorting — headers only become buttons when both are set. */
@@ -61,7 +61,7 @@ export function DataTable<T>({
     onSelectedIdsChange(allSelected ? [] : rows.map(rowKey));
   }
 
-  function toggleOne(id: string) {
+  function toggleOne(id: string | number) {
     if (!onSelectedIdsChange) return;
     onSelectedIdsChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]);
   }
@@ -95,6 +95,8 @@ export function DataTable<T>({
             <th
               key={col.key}
               scope="col"
+              // aria-sort belongs on the column header, not on the button inside it (FE-015).
+              aria-sort={canSort ? (isSorted ? (sort?.dir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined}
               style={col.width ? { width: col.width } : undefined}
               className={[
                 'px-3 py-2.5 text-label font-medium text-text-secondary',
@@ -105,7 +107,7 @@ export function DataTable<T>({
                 <button
                   type="button"
                   onClick={() => cycleSort(col)}
-                  aria-sort={isSorted ? (sort?.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  aria-label={`Urutkan berdasarkan ${col.header}`}
                   className={[
                     'inline-flex items-center gap-1 rounded-[var(--radius-sm)] hover:text-text',
                     col.align === 'right' || col.numeric ? 'flex-row-reverse' : '',

@@ -8,6 +8,12 @@ import type {
   UnitReport, User,
 } from './types';
 
+/**
+ * An id in a URL path. The API speaks numbers, but a route param is a
+ * string, so both are accepted and rendered into the path as-is.
+ */
+export type Id = number | string;
+
 interface Envelope<T> { success: boolean; data: T; error?: { code: string; message: string; details?: unknown[] }; meta?: Meta }
 
 export class ApiError extends Error {
@@ -76,7 +82,13 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   if (!json || json.data === undefined) {
     throw new ApiError(res.status, 'INVALID_RESPONSE', 'Respons server tidak dikenali.');
   }
-  // `meta` is surfaced by the endpoint functions that need it.
+  // The server keeps `meta` next to `data` in the envelope. Merge it into the
+  // payload so a paginated list is always `{...data, meta}` — otherwise
+  // `list.data.meta` is undefined and the pagination never renders (FE-001/008).
+  const data = json.data as unknown;
+  if (json.meta !== undefined && data !== null && typeof data === 'object' && !Array.isArray(data)) {
+    return { ...(data as Record<string, unknown>), meta: json.meta } as unknown as T;
+  }
   return json.data;
 }
 
@@ -110,9 +122,9 @@ export const users = {
   list: (q?: { q?: string; role?: string; isActive?: boolean }) => request<List<User>>('/users', { query: q }),
   create: (body: { username: string; fullName: string; password: string; role: string }) =>
     request<{ user: User }>('/users', { method: 'POST', body }),
-  update: (id: string, body: Partial<{ fullName: string; role: string; isActive: boolean; password: string }>) =>
+  update: (id: Id, body: Partial<{ fullName: string; role: string; isActive: boolean; password: string }>) =>
     request<{ user: User }>(`/users/${id}`, { method: 'PATCH', body }),
-  deactivate: (id: string) => request<{ user: User }>(`/users/${id}`, { method: 'DELETE' }),
+  deactivate: (id: Id) => request<{ user: User }>(`/users/${id}`, { method: 'DELETE' }),
 };
 
 // ── Consoles ────────────────────────────────────────────────────────────────
@@ -125,44 +137,59 @@ export const consoles = {
    * condition note for a non-admin session.
    */
   listPublic: () => request<List<PublicConsoleUnit>>('/consoles'),
-  get: (id: string) => request<{ console: ConsoleUnit; currentSession: RentalSession | null }>(`/consoles/${id}`),
+  get: (id: Id) => request<{ console: ConsoleUnit; currentSession: RentalSession | null }>(`/consoles/${id}`),
   create: (body: Partial<ConsoleUnit>) => request<{ console: ConsoleUnit }>('/consoles', { method: 'POST', body }),
-  update: (id: string, body: Partial<ConsoleUnit>) => request<{ console: ConsoleUnit }>(`/consoles/${id}`, { method: 'PATCH', body }),
-  remove: (id: string) => request<{ console: ConsoleUnit }>(`/consoles/${id}`, { method: 'DELETE' }),
+  update: (id: Id, body: Partial<ConsoleUnit>) => request<{ console: ConsoleUnit }>(`/consoles/${id}`, { method: 'PATCH', body }),
+  remove: (id: Id) => request<{ console: ConsoleUnit }>(`/consoles/${id}`, { method: 'DELETE' }),
 };
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 
+/**
+ * Body of `POST /sessions/quote`.
+ * - `sessionId` → preview of a RUNNING session: the server uses the session's
+ *   rate snapshot and the real clock (overtime included). No client estimate.
+ * - `consoleId` + `durationMinutes` → preview of a plan that has not started.
+ * - `extraMinutes` → extra PLANNED minutes (an extension), never overtime.
+ */
+export interface QuoteRequest {
+  sessionId?: number;
+  consoleId?: number;
+  durationMinutes?: number;
+  startedAt?: string;
+  extraMinutes?: number;
+}
+
 export const sessions = {
-  quote: (body: { consoleId: string; durationMinutes: number; startedAt?: string; extraMinutes?: number }) =>
+  quote: (body: QuoteRequest) =>
     request<Quote>('/sessions/quote', { method: 'POST', body }),
-  list: (q?: { status?: string; consoleId?: string; from?: string; to?: string; q?: string; page?: number; limit?: number }) =>
+  list: (q?: { status?: string; consoleId?: Id; from?: string; to?: string; q?: string; page?: number; limit?: number }) =>
     request<Paginated<RentalSession>>('/sessions', { query: q }),
   active: () => request<List<RentalSession>>('/sessions/active'),
-  get: (id: string) => request<{ session: RentalSession; console: ConsoleUnit | null; transaction?: Transaction }>(`/sessions/${id}`),
-  create: (body: { consoleId: string; customerName: string; customerContact?: string; durationMinutes: number; notes?: string; startedAt?: string }) =>
+  get: (id: Id) => request<{ session: RentalSession; console: ConsoleUnit | null; transaction?: Transaction }>(`/sessions/${id}`),
+  create: (body: { consoleId: number; customerName: string; customerContact?: string; durationMinutes: number; notes?: string; startedAt?: string }) =>
     request<{ session: RentalSession }>('/sessions', { method: 'POST', body }),
-  extend: (id: string, extraMinutes: number) =>
+  extend: (id: Id, extraMinutes: number) =>
     request<{ session: RentalSession }>(`/sessions/${id}/extend`, { method: 'POST', body: { extraMinutes } }),
-  finish: (id: string, body: { paymentMethod: PaymentMethod; amountPaid: number; discount?: number; discountReason?: string; extraCharge?: number; notes?: string }) =>
+  finish: (id: Id, body: { paymentMethod: PaymentMethod; amountPaid: number; discount?: number; discountReason?: string; extraCharge?: number; notes?: string }) =>
     request<{ transaction: Transaction }>(`/sessions/${id}/finish`, { method: 'POST', body }),
-  void: (id: string, reason: string) =>
+  void: (id: Id, reason: string) =>
     request<{ session: RentalSession }>(`/sessions/${id}/void`, { method: 'POST', body: { reason } }),
 };
 
 // ── Bookings ────────────────────────────────────────────────────────────────
 
 export const bookings = {
-  list: (q?: { date?: string; from?: string; to?: string; status?: string; consoleId?: string; q?: string }) =>
-    request<List<Booking>>('/bookings', { query: q }),
-  get: (id: string) => request<{ booking: Booking }>(`/bookings/${id}`),
-  create: (body: { consoleId: string; customerName: string; customerContact?: string; bookingDate: string; startTime: string; durationMinutes: number; notes?: string; discount?: number }) =>
+  list: (q?: { date?: string; from?: string; to?: string; status?: string; consoleId?: Id; q?: string; page?: number; limit?: number }) =>
+    request<Paginated<Booking>>('/bookings', { query: q }),
+  get: (id: Id) => request<{ booking: Booking }>(`/bookings/${id}`),
+  create: (body: { consoleId: number; customerName: string; customerContact?: string; bookingDate: string; startTime: string; durationMinutes: number; notes?: string; discount?: number }) =>
     request<{ booking: Booking }>('/bookings', { method: 'POST', body }),
-  update: (id: string, body: Partial<Booking> & { contact?: string }) =>
+  update: (id: Id, body: Partial<Booking> & { contact?: string }) =>
     request<{ booking: Booking }>(`/bookings/${id}`, { method: 'PATCH', body }),
-  checkIn: (id: string, durationMinutes?: number) =>
+  checkIn: (id: Id, durationMinutes?: number) =>
     request<{ session: RentalSession }>(`/bookings/${id}/check-in`, { method: 'POST', body: durationMinutes ? { durationMinutes } : {} }),
-  cancel: (id: string, reason?: string) =>
+  cancel: (id: Id, reason?: string) =>
     request<{ booking: Booking }>(`/bookings/${id}/cancel`, { method: 'POST', body: { reason } }),
 };
 
@@ -171,11 +198,11 @@ export const bookings = {
 export const transactions = {
   list: (q?: { from?: string; to?: string; method?: string; status?: string; q?: string; page?: number; limit?: number }) =>
     request<Paginated<Transaction> & { totals: { count: number; gross: number; paid: number; outstanding: number } }>('/transactions', { query: q }),
-  get: (id: string) =>
+  get: (id: Id) =>
     request<{ transaction: Transaction; items: TransactionItem[]; session: RentalSession | null; cashier: User | null; console: ConsoleUnit | null }>(`/transactions/${id}`),
-  void: (id: string, reason: string) =>
+  void: (id: Id, reason: string) =>
     request<{ transaction: Transaction }>(`/transactions/${id}/void`, { method: 'POST', body: { reason } }),
-  receiptUrl: (id: string, opts?: { print?: boolean }) => `/api/transactions/${id}/receipt?format=html${opts?.print ? '&print=1' : ''}`,
+  receiptUrl: (id: Id, opts?: { print?: boolean }) => `/api/transactions/${id}/receipt?format=html${opts?.print ? '&print=1' : ''}`,
 };
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
@@ -195,11 +222,27 @@ export const games = {
   list: (q?: { platform?: string; genre?: string; q?: string; includeInactive?: boolean }) =>
     request<List<Game>>('/games', { query: q as Record<string, string | boolean | undefined> }),
   create: (body: Partial<Game>) => request<{ game: Game }>('/games', { method: 'POST', body }),
-  update: (id: string, body: Partial<Game>) => request<{ game: Game }>(`/games/${id}`, { method: 'PATCH', body }),
-  remove: (id: string) => request<{ game: Game }>(`/games/${id}`, { method: 'DELETE' }),
+  update: (id: Id, body: Partial<Game>) => request<{ game: Game }>(`/games/${id}`, { method: 'PATCH', body }),
+  remove: (id: Id) => request<{ game: Game }>(`/games/${id}`, { method: 'DELETE' }),
 };
 
 // ── Reports ─────────────────────────────────────────────────────────────────
+
+/** The CSV flavours the server accepts. An unknown type is a 400, never a silent fallback. */
+export type ReportCsvType = 'sessions' | 'transactions' | 'units' | 'daily' | 'weekly' | 'monthly' | 'payments';
+
+/** `GET /reports/payments` — the same Transaction shape as GET /transactions. */
+export interface PaymentsReport {
+  items: Transaction[];
+  totals: {
+    count: number;
+    gross: number;
+    paid: number;
+    outstanding: number;
+    /** COUNT of void transactions — not rupiah. */
+    voided: number;
+  };
+}
 
 export const reports = {
   summary: (q?: { from?: string; to?: string }) => request<ReportsSummary>('/reports/summary', { query: q }),
@@ -208,8 +251,8 @@ export const reports = {
   monthly: (q?: { from?: string; to?: string }) => request<{ items: ReportRow[] }>('/reports/monthly', { query: q }),
   units: (q?: { from?: string; to?: string }) => request<{ items: UnitReport[] }>('/reports/units', { query: q }),
   payments: (q?: { from?: string; to?: string; method?: string; status?: string }) =>
-    request<{ items: Transaction[]; totals: { count: number; gross: number; paid: number; outstanding: number } }>('/reports/payments', { query: q }),
-  exportCsvUrl: (q: { type: string; from?: string; to?: string }) => `/api/reports/export.csv${buildQuery(q)}`,
+    request<PaymentsReport>('/reports/payments', { query: q }),
+  exportCsvUrl: (q: { type: ReportCsvType; from?: string; to?: string }) => `/api/reports/export.csv${buildQuery(q)}`,
 };
 
 // ── Settings + packages ─────────────────────────────────────────────────────
@@ -221,6 +264,6 @@ export const settings = {
   update: (body: Settings) => request<Settings>('/settings', { method: 'PUT', body }),
   packages: () => request<List<DurationPackage>>('/packages'),
   createPackage: (body: Partial<DurationPackage>) => request<{ package: DurationPackage }>('/packages', { method: 'POST', body }),
-  updatePackage: (id: string, body: Partial<DurationPackage>) => request<{ package: DurationPackage }>(`/packages/${id}`, { method: 'PATCH', body }),
-  removePackage: (id: string) => request<{ package: DurationPackage }>(`/packages/${id}`, { method: 'DELETE' }),
+  updatePackage: (id: Id, body: Partial<DurationPackage>) => request<{ package: DurationPackage }>(`/packages/${id}`, { method: 'PATCH', body }),
+  removePackage: (id: Id) => request<{ package: DurationPackage }>(`/packages/${id}`, { method: 'DELETE' }),
 };

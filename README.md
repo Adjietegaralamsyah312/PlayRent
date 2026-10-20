@@ -143,9 +143,14 @@ cd ../web && npm install
 
 # 7. Siapkan database + akun Super Admin (sekali saja)
 cd ../server
-npm run seed              # buat DB + data demo (TIDAK membuat akun login)
+npm run seed:schema      # buat DB + katalog (TIDAK menyuntik data demo)
 npm run admin:bootstrap   # buat Super Admin pertama (prompt sandi, tanpa echo)
 ```
+
+> **Pilih `seed:schema`, bukan `seed`, untuk instalasi produksi.** `seed:schema`
+> hanya menulis baris pengaturan usaha + katalog (unit, game, paket) — tanpa transaksi
+> fiktif dan tanpa sesi demo yang memblokir unit. `seed` (demo) menambah 44 hari
+> transaksi fiktif + 1 sesi aktif + 2 booking; **jangan** dipakai di pembukuan asli.
 
 > **Tidak perlu `pkg install` alat build apa pun.** Karena tidak ada modul native
 > (`better-sqlite3`, `bcrypt`, `argon2` semuanya dihindari), `npm install` tidak akan
@@ -185,16 +190,25 @@ belakang reverse proxy yang Anda kendalikan.
 
 ```sh
 cd server
-npm run seed       # = node src/seed.js → buat + migrasi + isi data demo
+npm run seed:schema   # = node src/seed-schema.js → buat + migrasi + katalog (produksi)
+npm run seed          # = node src/seed.js → buat + migrasi + data demo (dev/demo saja)
 ```
 
-`npm run seed` membuat file `server/data/playrent.db`, menjalankan `migrate()`, lalu mengisi
-data demo. Keduanya **idempotent** — jalankan dua kali, hasilnya sama.
+`npm run seed:schema` membuat file `server/data/playrent.db`, menjalankan `migrate()`,
+lalu mengisi **baris pengaturan usaha + katalog** (10 unit, 14 game, 4 paket). **Tidak ada
+transaksi, sesi, booking, atau akun** yang dibuat. `npm run seed` melakukan semuanya itu
+plus data demo (lihat bagian "Data demo"). Keduanya **idempotent** — jalankan dua kali,
+hasilnya sama.
 
-> **Penting: `npm run seed` tidak membuat akun login apa pun.** Tidak ada akun admin demo,
+> **Penting: tidak ada satu pun skrip yang membuat akun login.** Tidak ada akun admin demo,
 > tidak ada akun kasir. Satu-satunya akun Super Admin dibuat lewat CLI bootstrap (lihat di
 > bawah). Ini disengaja: password yang di-hardcode di dalam source tree adalah lubang
 > keamanan, dan tidak ada satu pun password yang tersimpan di repo ini.
+>
+> Baris `business_settings` (id = 1) sendiri dibuat oleh **migrasi v4**, jadi database
+> produksi tetap punya aturan harga walau `seed`/`seed:schema` belum pernah dijalankan.
+> Nama, alamat, dan nomor telepon di baris itu adalah placeholder — ganti lewat
+> **Pengaturan** di aplikasi.
 
 **Cara kerja `migrate()`.** `migrate()` memakai `PRAGMA user_version` sebagai penghitung.
 Setiap langkah di array `MIGRATIONS` dijalankan berurutan, dibungkus
@@ -202,20 +216,21 @@ Setiap langkah di array `MIGRATIONS` dijalankan berurutan, dibungkus
 seluruhnya memakai `IF NOT EXISTS`, sehingga dijalankan ulang menjadi no-op. `migrate()`
 dipanggil sekali saat boot dan aman dijalankan setiap kali.
 
-Tiga langkah migrasi yang sudah berjalan (`user_version` = 3):
+Empat langkah migrasi yang sudah berjalan (`user_version` = 4):
 
 | Versi | Yang dikerjakan |
 | --- | --- |
 | v1 | `schema.sql` — 12 tabel + indeks |
 | v2 | Bangun ulang tabel `users`: `role` jadi `CHECK ('superadmin','user')`, tambah kolom `phone`, tambah `bookings.customer_user_id` + indeksnya. Role lama `admin` → `superadmin`; role lama `cashier` → `user` + `is_active = 0` |
 | v3 | Cabut seluruh `auth_sessions` milik akun yang `is_active = 0` (mencegah "kebangkitan" sesi saat akun diaktifkan kembali) |
+| v4 | Buat baris `business_settings` (id = 1) bila belum ada — tanpa ini seluruh jalur uang (`/settings`, `/sessions/quote`, `/sessions`, `/bookings`) balas 500 di database yang belum di-seed |
 
 ### Reset database
 
 ```sh
 cd server
 rm -f data/playrent.db data/playrent.db-wal data/playrent.db-shm
-npm run seed
+npm run seed:schema    # atau: npm run seed  (kalau memang mau data demo)
 npm run admin:bootstrap   # akun Super Admin kembali perlu dibuat
 ```
 
@@ -305,7 +320,7 @@ Super Admin pertama. Akun lain tidak tersentuh.
 ```sh
 cd server
 npm install
-npm run seed                # buat DB + data demo — TIDAK membuat akun login
+npm run seed:schema        # buat DB + katalog (TIDAK menyuntik data demo) — TIDAK membuat akun login
 npm run admin:bootstrap     # buat Super Admin pertama ( prompted sandi)
 cd ../web && npm install
 ```
@@ -438,8 +453,8 @@ npm run restore -- ./data/backups/playrent-20261019-222330-481-3f9c2a.db
 
 Urutannya — **tidak ada yang ditimpa sebelum semua lolos pemeriksaan**:
 
-1. **Validasi file sumber** — `integrity_check`, `foreign_key_check`, tabel wajib, dan
-   `user_version` harus ≤ versi skema build ini (3). File yang tidak valid → **ditolak**,
+1. **Validasi file sumber** — `integrity_check`, `foreign_key_check`, tabel wajib, kolom wajib, dan
+   `user_version` harus ≤ versi skema build ini (4). File yang tidak valid → **ditolak**,
    database tidak disentuh.
 2. **Backup pra-restore otomatis** — snapshot database saat ini disimpan sebagai
    `server/data/backups/pre-restore-YYYYMMDD-HHMMSS-mmm-xxxxxx.db`. Ini safety net: kalau file yang
@@ -465,6 +480,9 @@ Urutannya — **tidak ada yang ditimpa sebelum semua lolos pemeriksaan**:
 
 ## Data demo
 
+> **Data demo hanya untuk development.** Untuk instalasi produksi gunakan
+> `npm run seed:schema` (katalog saja) — bukan `npm run seed`.
+
 `npm run seed` mengisi:
 
 - **Tanpa akun login.** Seed sengaja tidak membuat pengguna apa pun. Pada database **baru**,
@@ -486,14 +504,17 @@ Urutannya — **tidak ada yang ditimpa sebelum semua lolos pemeriksaan**:
 Data demo mudah dikenali: barisnya bertanda `notes = 'seed-demo'` (histori) dan
 `notes = 'seed-demo-live'` (sesi hidup di PS-03).
 
+`npm run seed:schema` mengisi **hanya** 10 unit + 14 game + 4 paket + 1 baris pengaturan
+usaha — **tanpa** transaksi, sesi, booking, atau akun. Itu yang dipakai instalasi produksi.
+
 ---
 
 ## Menjalankan aplikasi
 
-> **Sebelum login pertama:** pastikan akun Super Admin sudah ada. Kalau baru `npm run seed`
-> dan belum pernah `npm run admin:bootstrap`, tidak ada akun yang bisa masuk — seed sengaja
-> tidak membuat akun. Buat dulu lewat `npm run admin:bootstrap` (lihat bagian
-> "Cara membuat akun Super Admin pertama").
+> **Sebelum login pertama:** pastikan akun Super Admin sudah ada. Kalau baru
+> `npm run seed:schema` (atau `npm run seed`) dan belum pernah `npm run admin:bootstrap`,
+> tidak ada akun yang bisa masuk — seed sengaja tidak membuat akun. Buat dulu lewat
+> `npm run admin:bootstrap` (lihat bagian "Cara membuat akun Super Admin pertama").
 
 ### Mode pengembangan (dua terminal)
 
@@ -555,7 +576,7 @@ Status terakhir yang terverifikasi di lingkungan ini:
 
 | Pemeriksaan | Perintah | Hasil |
 | --- | --- | --- |
-| Test backend | `server: npm test` | **72 lulus / 0 gagal** (di dalamnya skrip smoke: 110/110 checks) |
+| Test backend | `server: npm test` | **83 lulus / 0 gagal** (72 lama + 11 regresi Batch 1; di dalamnya skrip smoke: 110/110 checks) |
 | Probe keamanan | `server: node tools/security-probe.mjs` | **PASS** — 0 blocker, 0 major, 0 minor, 69 cek |
 | Typecheck frontend | `web: tsc --noEmit` | **0 error** |
 | Build produksi | `web: npm run build` | **Sukses** — JS ≈ 482,77 kB (gzip 136,71 kB), CSS ≈ 33,59 kB (gzip 7,28 kB) |
@@ -619,10 +640,11 @@ PlayRent/
 │   └── CARA-PAKAI.md        ← panduan singkat operasional (masih memakai istilah "kasir" — baca sebagai panduan Super Admin)
 ├── server/
 │   ├── package.json  .env.example
-│   ├── data/                ← playrent.db (dibuat oleh seed) + backups/
+│   ├── data/                ← playrent.db (dibuat oleh seed:schema / seed) + backups/
 │   ├── tools/security-probe.mjs
 │   ├── src/
 │   │   ├── index.js  app.js  config.js  db.js  schema.sql  seed.js
+│   │   ├── seed-schema.js    ← CLI katalog saja (produksi): tanpa transaksi/sesi demo
 │   │   ├── admin-bootstrap.js ← CLI buat/reset Super Admin
 │   │   ├── backup.js          ← CLI snapshot & validasi backup
 │   │   ├── restore.js         ← CLI pemulihan (validasi + konfirmasi)

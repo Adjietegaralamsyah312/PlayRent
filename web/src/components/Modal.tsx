@@ -34,17 +34,34 @@ function Overlay({
 }: OverlayProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
+  // Callers pass inline arrows, so the callback identity changes on every
+  // render. Keeping it in a ref stops the effects below from re-running (and
+  // the focus from being stolen back) on every keystroke.
+  const closeRef = useRef(onOpenChange);
+  closeRef.current = onOpenChange;
+  const initialFocus = useRef(initialFocusRef);
+  initialFocus.current = initialFocusRef;
   useScrollLock(open);
 
+  // Focus runs ONCE, when the dialog opens. Re-running it per render pulls the
+  // caret out of the field the operator is typing in (FE-003).
   useEffect(() => {
     if (!open) return;
     restoreRef.current = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
-    const target = initialFocusRef?.current ?? panel?.querySelector<HTMLElement>(FOCUSABLE) ?? panel;
+    const target = initialFocus.current?.current ?? panel?.querySelector<HTMLElement>(FOCUSABLE) ?? panel;
     target?.focus();
+    return () => { restoreRef.current?.focus?.(); };
+  }, [open]);
+
+  // Esc closes, Tab stays inside the dialog. Independent from the focus effect
+  // so a new callback identity never re-registers the listener.
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
 
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && dismissible) { e.stopPropagation(); onOpenChange(false); return; }
+      if (e.key === 'Escape' && dismissible) { e.stopPropagation(); closeRef.current(false); return; }
       if (e.key !== 'Tab' || !panel) return;
       const nodes = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((n) => n.offsetParent !== null);
       if (nodes.length === 0) { e.preventDefault(); return; }
@@ -54,11 +71,8 @@ function Overlay({
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
     document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      restoreRef.current?.focus?.();
-    };
-  }, [open, dismissible, onOpenChange, initialFocusRef]);
+    return () => { document.removeEventListener('keydown', onKeyDown, true); };
+  }, [open, dismissible]);
 
   if (!open) return null;
 

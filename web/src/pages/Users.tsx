@@ -25,7 +25,7 @@ const ROLE_OPTIONS = [
 const FORM_ROLE_OPTIONS = ROLE_OPTIONS.slice(1);
 
 interface UserDraft {
-  id: string | null;
+  id: number | null;
   username: string;
   fullName: string;
   password: string;

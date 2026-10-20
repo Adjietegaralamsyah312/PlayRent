@@ -8,7 +8,7 @@ import { ConsoleCard } from '../components/ConsoleCard';
 import { EmptyState, Skeleton } from '../components/Feedback';
 import { Input, Textarea } from '../components/Form';
 import { consoles, sessions, settings as settingsApi } from '../lib/api';
-import { formatDurationShort, formatIDR } from '../lib/format';
+import { formatDurationShort, formatIDR, toId } from '../lib/format';
 import { useAuth } from '../lib/auth';
 import { useSettings } from '../lib/settings-context';
 import { useToast } from '../lib/toast';
@@ -38,7 +38,11 @@ export function SessionStart() {
   const packages = useAsync(() => settingsApi.packages(), []);
 
   // `/unit` and `/booking` deep-link straight into a preselected console.
-  const [consoleId, setConsoleId] = useState<string | null>(params.get('consoleId'));
+  // The URL carries a STRING ("3") but the API's console ids are NUMBERS, so
+  // the param is normalised here — otherwise `3 === "3"` is false, the card is
+  // never highlighted and the summary shows "—" (FE-FIX-3).
+  const urlConsoleId = params.get('consoleId');
+  const [consoleId, setConsoleId] = useState<number | null>(() => toId(urlConsoleId));
   const [customerName, setCustomerName] = useState('');
   const [customerContact, setCustomerContact] = useState('');
   const [minutes, setMinutes] = useState(60);
@@ -52,6 +56,14 @@ export function SessionStart() {
   const minDuration = settings?.rules.minDurationMinutes ?? 30;
   const effectiveMinutes = customMinutes ? toInt(customMinutes) : minutes;
   const selected = units.data?.items.find((u) => u.id === consoleId) ?? null;
+
+  // A different consoleId in the URL reselects the unit — the deep-link stays
+  // the source of truth. Deps are the raw param (a string), not the
+  // URLSearchParams object, so a re-render never resets a manual pick.
+  useEffect(() => {
+    const next = toId(urlConsoleId);
+    if (next !== null) setConsoleId(next);
+  }, [urlConsoleId]);
 
   // Price preview always comes from the server — the client never computes money.
   useEffect(() => {

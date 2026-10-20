@@ -87,7 +87,7 @@ export function Transactions() {
 
   // A blocked popup used to fail silently — the operator pressed "Cetak struk"
   // and nothing happened. The internal receipt page is the way out.
-  function handlePrint(id: string) {
+  function handlePrint(id: number) {
     const res = openReceipt(id, true);
     if (!res.ok) {
       toastError('Popup diblokir peramban. Izinkan popup lalu coba lagi.', {

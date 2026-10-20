@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { AppError, ok, created } from '../lib/errors.js'
-import { parse, idParam } from '../lib/validate.js'
+import { AppError, ok, created, isUniqueViolation } from '../lib/errors.js'
+import { parse, idParam, likePattern } from '../lib/validate.js'
 import { mapUser } from '../lib/mappers.js'
 import { hashPassword, requireAuth, requireSuperAdmin, revokeAllForUser } from '../lib/auth.js'
 import { withTx } from '../db.js'
@@ -34,7 +34,7 @@ export default function usersRoutes(db) {
     const { q, role, isActive } = req.query
     const where = []
     const params = []
-    if (q) { where.push('(username LIKE ? OR full_name LIKE ?)'); params.push(`%${q}%`, `%${q}%`) }
+    if (q) { where.push("(username LIKE ? ESCAPE '\\' OR full_name LIKE ? ESCAPE '\\')"); params.push(likePattern(q), likePattern(q)) }
     if (role === 'superadmin' || role === 'user') { where.push('role = ?'); params.push(role) }
     if (isActive === 'true' || isActive === '1') where.push('is_active = 1')
     if (isActive === 'false' || isActive === '0') where.push('is_active = 0')
@@ -49,10 +49,19 @@ export default function usersRoutes(db) {
     }
     const { hash, salt } = hashPassword(body.password)
     const now = new Date().toISOString()
-    const info = db.prepare(
-      `INSERT INTO users (username, full_name, password_hash, password_salt, role, is_active, created_at, updated_at)
-       VALUES (?,?,?,?,?,1,?,?)`,
-    ).run(body.username, body.fullName, hash, salt, body.role, now, now)
+    let info
+    try {
+      // BE-015: the SELECT above is a check-then-act. A concurrent insert of
+      // the same username still hits the UNIQUE index — catch it here so the
+      // client gets 409 instead of a 500.
+      info = db.prepare(
+        `INSERT INTO users (username, full_name, password_hash, password_salt, role, is_active, created_at, updated_at)
+         VALUES (?,?,?,?,?,1,?,?)`,
+      ).run(body.username, body.fullName, hash, salt, body.role, now, now)
+    } catch (err) {
+      if (isUniqueViolation(err, 'users')) throw new AppError(409, 'DUPLICATE_USERNAME')
+      throw err
+    }
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(info.lastInsertRowid))
     logAudit(db, {
       actorId: req.user.id, actorName: req.user.full_name, action: 'user_created',

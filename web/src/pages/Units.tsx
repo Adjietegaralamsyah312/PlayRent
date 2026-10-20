@@ -40,7 +40,7 @@ const STATUS_OPTIONS = [
 ];
 
 interface Draft {
-  id: string | null;
+  id: number | null;
   code: string;
   consoleType: ConsoleType;
   roomType: RoomType;
@@ -83,12 +83,12 @@ export function Units() {
   const [deleteTarget, setDeleteTarget] = useState<ConsoleUnit | null>(null);
   const [extendTarget, setExtendTarget] = useState<ExtendTarget | null>(null);
   const [finishTarget, setFinishTarget] = useState<FinishTarget | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const units = list.data?.items ?? [];
-  const liveByConsole = new Map<string, RentalSession>((active.data?.items ?? []).map((s) => [s.consoleId, s]));
+  const liveByConsole = new Map<number, RentalSession>((active.data?.items ?? []).map((s) => [s.consoleId, s]));
 
-  async function openDialog(kind: 'extend' | 'finish', sessionId: string) {
+  async function openDialog(kind: 'extend' | 'finish', sessionId: number) {
     setBusyId(sessionId);
     try {
       const { session } = await sessions.get(sessionId);
@@ -108,7 +108,9 @@ export function Units() {
 
   async function saveDraft() {
     if (!draft) return;
-    const payload = {
+    // The create schema on the server is `.strict()` and has no `isActive`
+    // (the server always activates a new unit) — sending it fails with 400.
+    const payload: Omit<Partial<ConsoleUnit>, 'isActive'> = {
       code: draft.code.trim().toUpperCase(),
       consoleType: draft.consoleType,
       roomType: draft.roomType,
@@ -116,10 +118,10 @@ export function Units() {
       hourlyRate: toInt(draft.hourlyRate),
       status: draft.status,
       conditionNote: draft.conditionNote.trim() || null,
-      isActive: draft.isActive,
     };
     try {
-      if (draft.id) await consoles.update(draft.id, payload);
+      // `isActive` is a PATCH-only field.
+      if (draft.id) await consoles.update(draft.id, { ...payload, isActive: draft.isActive });
       else await consoles.create(payload);
       success(draft.id ? 'Konsol diperbarui.' : 'Konsol ditambahkan.');
       setDraft(null);

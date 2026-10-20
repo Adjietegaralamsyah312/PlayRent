@@ -16,7 +16,15 @@ import { openReceipt } from '../lib/receipt';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../lib/toast';
 import { errorMessage, useAsync } from '../lib/useAsync';
-import type { TransactionItem } from '../lib/types';
+import type { TransactionItem, TransactionItemKind } from '../lib/types';
+
+/** The API only emits English codes; the UI never shows them raw. */
+const ITEM_KIND_LABEL: Record<TransactionItemKind, string> = {
+  rental: 'Sewa',
+  overtime: 'Kelebihan',
+  extra: 'Tambahan',
+  discount: 'Diskon',
+};
 
 export function TransactionDetail() {
   const { id } = useParams<{ id: string }>();
@@ -76,6 +84,7 @@ export function TransactionDetail() {
   }
 
   const columns: Column<TransactionItem>[] = [
+    { key: 'kind', header: 'Jenis', render: (i) => ITEM_KIND_LABEL[i.kind] },
     { key: 'description', header: 'Item', primary: true, render: (i) => i.description },
     { key: 'qty', header: 'Qty', numeric: true, render: (i) => String(i.qty) },
     { key: 'unitPrice', header: 'Harga satuan', numeric: true, hideOnMobile: true, render: (i) => formatIDR(i.unitPrice) },

@@ -11,7 +11,7 @@ import { Timer } from '../components/Timer';
 import { ExtendDialog, FinishDialog, toExtendTarget, toFinishTarget } from '../components/session-dialogs';
 import type { ExtendTarget, FinishTarget } from '../components/session-dialogs';
 import { sessions } from '../lib/api';
-import { formatDurationShort, formatIDR, formatJakarta } from '../lib/format';
+import { elapsedMinutes, formatDurationShort, formatIDR, formatJakarta } from '../lib/format';
 import { SESSION_STATUS, effectiveSessionStatus } from '../lib/status';
 import { useCountdown } from '../lib/useCountdown';
 import { useAuth } from '../lib/auth';
@@ -170,7 +170,7 @@ export function SessionDetail() {
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-text-secondary">Durasi (rencana / tercatat)</dt>
                 <dd className="tnum text-text">
-                  {formatDurationShort(session.plannedMinutes)} / {formatDurationShort(session.billedMinutes)}
+                  {formatDurationShort(session.plannedMinutes)} / {formatDurationShort(live ? elapsedMinutes(session.startedAt) : session.billedMinutes)}
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-3">

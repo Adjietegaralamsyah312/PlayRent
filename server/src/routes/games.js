@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { AppError, ok, created } from '../lib/errors.js'
-import { parse, idParam } from '../lib/validate.js'
+import { parse, idParam, likePattern } from '../lib/validate.js'
 import { mapGame } from '../lib/mappers.js'
 import { requireAuth, requireSuperAdmin } from '../lib/auth.js'
 import { logAudit } from '../lib/audit.js'
@@ -28,7 +28,7 @@ export default function gamesRoutes(db) {
     if (!(includeInactive === 'true' || includeInactive === '1')) where.push('is_active = 1')
     if (['PS4', 'PS5', 'both'].includes(platform)) { where.push('platform = ?'); params.push(platform) }
     if (genre) { where.push('genre = ?'); params.push(genre) }
-    if (q) { where.push('title LIKE ?'); params.push(`%${String(q).toLowerCase()}%`) }
+    if (q) { where.push("title LIKE ? ESCAPE '\\'"); params.push(likePattern(String(q).toLowerCase())) }
     const sql = `SELECT * FROM game_catalog ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY title ASC`
     return ok(res, { items: db.prepare(sql).all(...params).map(mapGame) })
   })

@@ -56,7 +56,7 @@ export function Dashboard() {
 
   const [extendTarget, setExtendTarget] = useState<ExtendTarget | null>(null);
   const [finishTarget, setFinishTarget] = useState<FinishTarget | null>(null);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<number | null>(null);
 
   // specs/dashboard.md — the ending-soon strip is the one thing that must be live.
   usePolling(async () => {
@@ -68,7 +68,7 @@ export function Dashboard() {
     }
   }, 30_000);
 
-  async function openDialog(kind: 'extend' | 'finish', sessionId: string) {
+  async function openDialog(kind: 'extend' | 'finish', sessionId: number) {
     setLoadingId(sessionId);
     try {
       const { session } = await sessions.get(sessionId);

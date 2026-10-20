@@ -28,8 +28,8 @@ function roundUpTo(amount: number, step: number): number {
 }
 
 export interface ExtendTarget {
-  id: string;
-  consoleId: string;
+  id: number;
+  consoleId: number;
   consoleCode: string | null;
   plannedMinutes: number;
   endsAt: string;
@@ -70,14 +70,16 @@ export function ExtendDialog({ open, onOpenChange, session, warnMinutes, onDone 
     setFormError(null);
   }, [open, session]);
 
-  // The addition is the difference between the extended quote and the base quote.
+  // The addition is the difference between the extended quote and the base
+  // quote. Both are priced by the server against the RUNNING session, so the
+  // session's rate snapshot is used — not the console's current tariff (FE-010).
   useEffect(() => {
     if (!open || !session || effectiveExtra <= 0) { setExtraCost(null); return; }
     let alive = true;
     setQuoteLoading(true);
     Promise.all([
-      sessions.quote({ consoleId: session.consoleId, durationMinutes: session.plannedMinutes }),
-      sessions.quote({ consoleId: session.consoleId, durationMinutes: session.plannedMinutes, extraMinutes: effectiveExtra }),
+      sessions.quote({ sessionId: session.id }),
+      sessions.quote({ sessionId: session.id, extraMinutes: effectiveExtra }),
     ])
       .then(([base, next]) => { if (alive) setExtraCost(Math.max(0, next.total - base.total)); })
       .catch(() => { if (alive) setExtraCost(null); })
@@ -176,6 +178,14 @@ export function ExtendDialog({ open, onOpenChange, session, warnMinutes, onDone 
           </div>
         </dl>
 
+        {/* The session is already past its end: the extra minutes are minutes
+            that were already billed, so the extension does not add to the bill. */}
+        {extraCost === 0 && !quoteLoading && effectiveExtra > 0 && (
+          <p className="text-caption text-text-muted">
+            Perpanjangan ini tidak menambah tagihan — waktu tersebut sudah ditagih.
+          </p>
+        )}
+
         {formError && <p role="alert" className="text-body-sm text-danger">{formError}</p>}
       </div>
     </Modal>
@@ -185,8 +195,8 @@ export function ExtendDialog({ open, onOpenChange, session, warnMinutes, onDone 
 // ── Finish ──────────────────────────────────────────────────────────────────
 
 export interface FinishTarget {
-  id: string;
-  consoleId: string;
+  id: number;
+  consoleId: number;
   consoleCode: string | null;
   customerName: string;
   plannedMinutes: number;
@@ -221,6 +231,7 @@ export function FinishDialog({ open, onOpenChange, session, onPaid }: FinishDial
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
   const [paid, setPaid] = useState<Transaction | null>(null);
 
   const isAdmin = user?.role === 'superadmin';
@@ -236,14 +247,16 @@ export function FinishDialog({ open, onOpenChange, session, onPaid }: FinishDial
     setExtraCharge('');
     setNotes('');
     setFormError(null);
+    setQuoteError(null);
+    setEstimate(null);
 
-    // ponytail: overtime is a client estimate for the preview only — the server
-    // recomputes it from the real clock on finish and its total is authoritative.
-    const overtime = Math.max(0, Math.ceil((Date.now() - new Date(session.endsAt).getTime()) / 60_000));
+    // The server prices the running session: its rate snapshot, the real
+    // clock and the overtime tariff. The client never estimates overtime
+    // itself — the preview IS the server's number (FE-004/FE-010).
     let alive = true;
-    sessions.quote({ consoleId: session.consoleId, durationMinutes: session.plannedMinutes, extraMinutes: overtime })
+    sessions.quote({ sessionId: session.id })
       .then((q) => { if (alive) setEstimate(q); })
-      .catch(() => { if (alive) setEstimate(null); });
+      .catch((e) => { if (alive) { setEstimate(null); setQuoteError(errorMessage(e)); } });
     return () => { alive = false; };
   }, [open, session]);
 
@@ -251,7 +264,9 @@ export function FinishDialog({ open, onOpenChange, session, onPaid }: FinishDial
   const overtimeAmount = estimate?.overtimeAmount ?? 0;
   const discountValue = toInt(discount);
   const chargeValue = toInt(extraCharge);
-  const total = Math.max(0, subtotal + overtimeAmount + chargeValue - discountValue);
+  // Same cap as the server: the discount can never exceed the gross amount.
+  const gross = subtotal + overtimeAmount + chargeValue;
+  const total = Math.max(0, gross - Math.min(discountValue, gross));
   const paidValue = method === 'cash' ? toInt(amountPaid) : total;
   const changeDue = Math.max(0, paidValue - total);
   const shortPaid = method === 'cash' && paidValue < total;
@@ -262,6 +277,7 @@ export function FinishDialog({ open, onOpenChange, session, onPaid }: FinishDial
 
   async function handleSubmit() {
     if (!session || !method) { setFormError('Pilih metode pembayaran.'); return; }
+    if (!estimate) { setFormError('Tagihan belum selesai dihitung. Tutup dan buka lagi dialog ini.'); return; }
     if (shortPaid) { setFormError('Jumlah dibayar kurang dari total tagihan.'); return; }
     if (discountValue > 0 && discountReason.trim().length < 3) {
       setFormError('Alasan diskon wajib diisi (minimal 3 karakter).');
@@ -344,9 +360,9 @@ export function FinishDialog({ open, onOpenChange, session, onPaid }: FinishDial
             loading={submitting}
             loadingText="Memproses…"
             iconLeft={<ReceiptText className="size-4" aria-hidden="true" />}
-            disabled={!method || shortPaid}
+            disabled={!method || shortPaid || !estimate}
           >
-            {method && method !== 'cash' ? 'Bayar' : 'Bayar tunai'} · {formatIDR(total)}
+            {method && method !== 'cash' ? 'Bayar' : 'Bayar tunai'} · {estimate ? formatIDR(total) : '…'}
           </Button>
         </>
       }
@@ -391,9 +407,17 @@ export function FinishDialog({ open, onOpenChange, session, onPaid }: FinishDial
             <dt className="font-medium text-text">Total</dt>
             <dd className="tnum font-bold text-text">{formatIDR(total)}</dd>
           </div>
-          <p className="text-caption text-text-muted">
-            Estimasi dari harga sewa. Total akhir dihitung server saat sesi ditutup.
-          </p>
+          {quoteError ? (
+            <p role="alert" className="text-caption text-danger">
+              Gagal menghitung tagihan: {quoteError}
+            </p>
+          ) : (
+            <p className="text-caption text-text-muted">
+              {estimate
+                ? 'Harga dihitung server dari tarif sesi dan waktu berjalan. Total akhir dihitung server saat sesi ditutup.'
+                : 'Menghitung tagihan…'}
+            </p>
+          )}
         </dl>
 
         <PaymentMethodPicker

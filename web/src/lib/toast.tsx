@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 
@@ -44,8 +44,16 @@ const nextId = () => `t${++seq}-${Date.now()}`;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // One timer per toast — cleared when the toast is dismissed or the provider
+  // unmounts, so a closed toast never keeps a timer alive (FE-020).
+  const timers = useRef(new Map<string, number>());
 
   const dismiss = useCallback((id: string) => {
+    const handle = timers.current.get(id);
+    if (handle !== undefined) {
+      window.clearTimeout(handle);
+      timers.current.delete(id);
+    }
     setToasts((list) => list.filter((t) => t.id !== id));
   }, []);
 
@@ -53,9 +61,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const id = nextId();
     const duration = input.duration ?? (input.action ? 8000 : 4200);
     setToasts((list) => [...list, { ...input, id, duration }].slice(-3));
-    if (duration > 0) window.setTimeout(() => dismiss(id), duration);
+    if (duration > 0) {
+      timers.current.set(id, window.setTimeout(() => dismiss(id), duration));
+    }
     return id;
   }, [dismiss]);
+
+  // Every pending timer dies with the provider.
+  useEffect(() => () => {
+    timers.current.forEach((handle) => window.clearTimeout(handle));
+    timers.current.clear();
+  }, []);
 
   const api = useMemo<ToastApi>(() => ({
     toast,

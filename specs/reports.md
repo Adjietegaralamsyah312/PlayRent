@@ -28,12 +28,20 @@
 | Endpoint | Fields |
 | --- | --- |
 | `GET /api/reports/summary?from&to` | `{revenueRecorded, revenueOutstanding, transactionCount, sessionsCount, totalMinutes, avgPerTransaction, voidedCount}` |
-| `GET /api/reports/daily?from&to` | `items[].{date, revenue, transactions, sessions, minutes}` |
-| `GET /api/reports/weekly?from&to` | same shape, `date` = `2026-W42` |
-| `GET /api/reports/monthly?from&to` | same shape, `date` = `2026-10` |
+| `GET /api/reports/daily?from&to` | `items[].{date, revenue, transactions, sessions, minutes}` — **one row per day in the range**, days without transactions come back as 0 |
+| `GET /api/reports/weekly?from&to` | same shape, `date` = `2026-W42` (ISO-8601) — **one row per week in the range**, empty weeks come back as 0 |
+| `GET /api/reports/monthly?from&to` | same shape, `date` = `2026-10` — **one row per month in the range**, empty months come back as 0 |
 | `GET /api/reports/units?from&to` | `items[].{consoleId, code, consoleType, roomType, sessions, minutes, revenue, utilizationPct}` |
-| `GET /api/reports/payments?from&to&method&status` | `{items, totals}` |
-| `GET /api/reports/export.csv?type=sessions\|transactions\|units\|daily&from&to` | `text/csv; charset=utf-8`, BOM-prefixed, filename `playrent-{type}-{from}-{to}.csv` |
+| `GET /api/reports/payments?from&to&method&status` | `{items: Transaction[], totals: {count, gross, paid, outstanding, voided}}` — `voided` is the **count** of void transactions, not rupiah |
+| `GET /api/reports/export.csv?type=sessions\|transactions\|units\|daily\|weekly\|monthly\|payments&from&to` | `text/csv; charset=utf-8`, BOM-prefixed, filename `playrent-{type}-{from}-{to}.csv` |
+
+**Empty periods** (`daily`/`weekly`/`monthly`). The server builds the full list of periods for the whole `from..to` range first, then fills it from the transaction rows. The table therefore **never skips** a day/week/month without activity — an empty period appears with `revenue/transactions/sessions/minutes = 0`. Week labels are ISO-8601 (`2026-W01` starts 2025-12-29), so a label can cross the calendar-year boundary. Period arithmetic uses **Jakarta time**.
+
+**Export types.** `type` accepts 7 values: `sessions`, `transactions`, `units`, `daily`, `weekly`, `monthly`, `payments`. An unknown `type` (or an empty one) → **400 `VALIDATION_ERROR`** naming the valid types — there is **no** silent fallback to `transactions`. `daily|weekly|monthly` export exactly the aggregates of R2–R4 (empty periods included, columns `Tanggal, Pendapatan, Transaksi, Sesi, Menit`); `payments` exports the same dataset as R6 (transaction columns).
+
+**Formula injection.** Every CSV cell is guarded: a **string** cell starting with `=`, `+`, `-`, `@`, tab, or CR gets a `'` prefix (OWASP recommendation). Real numbers are untouched — the prefix applies to text only. A customer-controlled name cannot execute a spreadsheet when the CSV is opened.
+
+**Range.** The `/reports/*` endpoints accept an **unbounded** `from..to`. The 365-day cap applies only to the dashboard endpoints (`/dashboard/revenue-chart`, `/dashboard/busy-hours`) — a wider range there returns 400. A very wide report range produces many rows (one per day for `daily`), so the UI still warns via the "> 366 hari" notice in §3.
 
 `from`/`to` are **inclusive Jakarta-local dates** (`YYYY-MM-DD`). If omitted the server defaults to first-of-month → today; the UI mirrors that default visibly in the range bar so the number on screen is never unexplained.
 
@@ -62,7 +70,7 @@
 | --- | --- | --- | --- | --- |
 | `from` | date | **Dari tanggal** | yes | empty → *"Pilih tanggal mulai."*; future → *"Tanggal tidak boleh melewati hari ini."* |
 | `to` | date | **Sampai tanggal** | yes | empty → *"Pilih tanggal akhir."*; `from > to` → *"Tanggal mulai tidak boleh melewati tanggal akhir."* |
-| `type` (export) | Select | **Jenis data** | yes | Sesi Rental (`sessions`) · Transaksi (`transactions`) · Performa Unit (`units`) · Rekap Harian (`daily`); no default — the user must choose, because guessing would export the wrong file |
+| `type` (export) | Select | **Jenis data** | yes | 7 options: Sesi Rental (`sessions`) · Transaksi (`transactions`) · Performa Unit (`units`) · Rekap Harian (`daily`) · Rekap Mingguan (`weekly`) · Rekap Bulanan (`monthly`) · Pembayaran (`payments`); no default — the user must choose, because guessing would export the wrong file. Anything outside those 7 is rejected by the server with 400 `VALIDATION_ERROR` |
 
 Presets fill both fields. `maxDate` = today (Jakarta). The range is pushed to the URL on change (replaceState) so a reload keeps context.
 

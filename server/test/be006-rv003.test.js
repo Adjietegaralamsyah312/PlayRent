@@ -121,8 +121,8 @@ test('SES-6 the v3 migration purges the sessions of inactive accounts only', asy
     assert.equal(db.prepare('SELECT COUNT(*) AS c FROM auth_sessions').get().c, 2)
 
     const res = migrate(db)
-    assert.equal(res.version, 3, 'the schema is now at version 3')
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3)
+    assert.equal(res.version, 4, 'the schema is now at version 4 (v4 adds the business_settings row)')
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4)
 
     // The cashier was demoted to an inactive 'user' → its session is gone.
     const kasir = db.prepare("SELECT role, is_active FROM users WHERE username = 'kasir_lama'").get()
@@ -142,7 +142,7 @@ test('SES-6 the v3 migration purges the sessions of inactive accounts only', asy
     // Idempotent: running migrate() again changes nothing.
     const db2 = openDatabase(join(dir, 'v1.db'))
     migrate(db2)
-    assert.equal(db2.prepare('PRAGMA user_version').get().user_version, 3)
+    assert.equal(db2.prepare('PRAGMA user_version').get().user_version, 4)
     assert.equal(db2.prepare('SELECT COUNT(*) AS c FROM auth_sessions').get().c, 1)
     db2.close()
   } finally {

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { AppError, ok, created } from '../lib/errors.js'
 import { parse, idParam } from '../lib/validate.js'
 import { mapPackage } from '../lib/mappers.js'
-import { getSettingsRow, settingsToApi, settingsToPublicApi } from '../lib/settings.js'
+import { getSettingsRow, settingsToApi, settingsToPublicApi, updateSettingsRow } from '../lib/settings.js'
 import { requireAuth, requireSuperAdmin, isSuperAdmin } from '../lib/auth.js'
 import { logAudit } from '../lib/audit.js'
 import { nowIso } from '../lib/time.js'
@@ -47,11 +47,9 @@ export default function settingsRoutes(db) {
 
   r.put('/', requireSuperAdmin, (req, res) => {
     const body = parse(updateSchema, req.body)
-    const before = getSettingsRow(db)
-    const beforeApi = settingsToApi(before)
-    const sets = []
-    const params = []
-    const push = (col, val) => { sets.push(`${col} = ?`); params.push(val) }
+    const before = settingsToApi(getSettingsRow(db))
+    const patch = {}
+    const push = (col, val) => { patch[col] = val }
 
     if (body.business) {
       const b = body.business
@@ -72,16 +70,17 @@ export default function settingsRoutes(db) {
     }
     if (body.payments) push('payment_methods_json', JSON.stringify(body.payments.methods))
 
-    if (sets.length) {
-      push('updated_at', nowIso())
-      params.push(1)
-      db.prepare(`UPDATE business_settings SET ${sets.join(', ')} WHERE id = ?`).run(...params)
+    if (Object.keys(patch).length) {
+      // UPSERT: on a DB whose settings row is missing the save must still
+      // land — a plain UPDATE would silently hit zero rows.
+      patch.updated_at = nowIso()
+      updateSettingsRow(db, patch)
     }
     const after = settingsToApi(getSettingsRow(db))
     logAudit(db, {
       actorId: req.user.id, actorName: req.user.full_name, action: 'settings_updated',
       entity: 'business_settings', entityId: 1, description: 'Pengaturan usaha diperbarui',
-      meta: { before: beforeApi, after },
+      meta: { before, after },
     })
     return ok(res, after)
   })

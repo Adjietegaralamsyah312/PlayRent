@@ -322,8 +322,12 @@ async function main() {
     const admin = await login(ADMIN.username, ADMIN.password)
     const c = (await admin.post('/api/consoles', { code: 'D-1', consoleType: 'PS4', roomType: 'Reguler', controllers: 2, hourlyRate: 12000 })).body.data.console
 
-    // force a genuine internal error: remove the settings row → rulesFromRow(undefined) TypeError
+    // Force a genuine internal error. Deleting the settings row no longer
+    // works as a trigger: since BE-001 `getSettingsRow` falls back to the
+    // default row, so the route succeeds instead of crashing. Dropping the
+    // table the route writes to still produces a real driver error.
     db.prepare('DELETE FROM business_settings').run()
+    db.exec('DROP TABLE rental_sessions')
     const err = await admin.post('/api/sessions', { consoleId: c.id, customerName: 'Boom', durationMinutes: 60 })
     const etext = JSON.stringify(err.body)
     const leaks = /at .*\(|\.js:\d+|SELECT |INSERT |SQLITE|stack/i.test(etext) && !/\/api/.test(etext)

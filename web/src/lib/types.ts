@@ -1,4 +1,9 @@
 // API shapes — mirrors api-contract.md exactly. Nothing here is invented.
+//
+// Every `id` is a NUMBER: the server maps SQLite `INTEGER PRIMARY KEY` rows
+// straight through (`id: r.id`), so the wire format is a JSON number. Typing
+// them as string made `3 === "3"` comparisons silently false — the deep-link
+// `/sesi/baru?consoleId=3` never preselected the unit (FE-FIX-3).
 
 export type Role = 'superadmin' | 'user';
 
@@ -15,7 +20,7 @@ export type RoomType = 'Reguler' | 'VIP';
 export type GamePlatform = 'PS4' | 'PS5' | 'both';
 
 export interface User {
-  id: string;
+  id: number;
   username: string;
   fullName: string;
   role: Role;
@@ -25,7 +30,7 @@ export interface User {
 }
 
 export interface ConsoleUnit {
-  id: string;
+  id: number;
   code: string;
   consoleType: ConsoleType;
   roomType: RoomType;
@@ -43,7 +48,7 @@ export interface ConsoleUnit {
  * here — the customer page cannot render what it never receives.
  */
 export interface PublicConsoleUnit {
-  id: string;
+  id: number;
   code: string;
   consoleType: ConsoleType;
   roomType: RoomType;
@@ -56,12 +61,12 @@ export interface PublicConsoleUnit {
 export interface SessionExtension {
   minutes: number;
   at: string;
-  byUserId?: string;
+  byUserId?: number;
 }
 
 export interface RentalSession {
-  id: string;
-  consoleId: string;
+  id: number;
+  consoleId: number;
   consoleCode: string | null;
   customerName: string;
   customerContact: string | null;
@@ -69,13 +74,14 @@ export interface RentalSession {
   startedAt: string;
   endsAt: string;
   plannedMinutes: number;
-  billedMinutes: number;
+  /** Null while the session is still running — the server bills it on finish. */
+  billedMinutes: number | null;
   extensions: SessionExtension[];
   notes: string | null;
   rateSnapshot: number;
-  createdBy: string | null;
+  createdBy: number | null;
   finishedAt: string | null;
-  transactionId: string | null;
+  transactionId: number | null;
 }
 
 export interface Quote {
@@ -92,9 +98,9 @@ export interface Quote {
 }
 
 export interface Transaction {
-  id: string;
+  id: number;
   number: string;
-  sessionId: string;
+  sessionId: number;
   consoleCode: string;
   customerName: string;
   cashierName: string;
@@ -110,12 +116,16 @@ export interface Transaction {
   changeDue: number;
   status: TxStatus;
   voidReason: string | null;
-  voidBy: string | null;
+  voidBy: number | null;
   voidedAt: string | null;
 }
 
+/** The server's `transaction_items.kind` — the CHECK constraint allows exactly these. */
+export type TransactionItemKind = 'rental' | 'overtime' | 'extra' | 'discount';
+
 export interface TransactionItem {
-  id: string;
+  id: number;
+  kind: TransactionItemKind;
   description: string;
   qty: number;
   unitPrice: number;
@@ -123,8 +133,8 @@ export interface TransactionItem {
 }
 
 export interface Booking {
-  id: string;
-  consoleId: string;
+  id: number;
+  consoleId: number;
   customerName: string;
   customerContact: string | null;
   bookingDate: string;
@@ -137,7 +147,7 @@ export interface Booking {
 }
 
 export interface Game {
-  id: string;
+  id: number;
   title: string;
   platform: GamePlatform;
   genre: string;
@@ -147,7 +157,7 @@ export interface Game {
 }
 
 export interface DurationPackage {
-  id: string;
+  id: number;
   name: string;
   durationMinutes: number;
   price: number;
@@ -164,13 +174,22 @@ export interface BusinessSettings {
   taxNote: string;
 }
 
-export interface PricingRules {
+/** The rules every session receives — the public subset. */
+export interface PublicPricingRules {
   minDurationMinutes: number;
   roundingMinutes: number;
-  overtimeRatePerHour: number;
-  overtimeGraceMinutes: number;
   defaultHourlyRate: number;
   warnMinutes: number[];
+}
+
+/**
+ * The admin rules: the public ones plus the internal overtime tariff. The
+ * server sends the overtime tariff to a super admin only — a customer session
+ * gets the public subset (see `CustomerSettings`).
+ */
+export interface PricingRules extends PublicPricingRules {
+  overtimeRatePerHour: number;
+  overtimeGraceMinutes: number;
 }
 
 export interface Settings {
@@ -186,12 +205,9 @@ export interface Settings {
  */
 export interface CustomerSettings {
   business: BusinessSettings;
-  rules: {
-    minDurationMinutes: number;
-    roundingMinutes: number;
-    defaultHourlyRate: number;
-    warnMinutes: number[];
-  };
+  rules: PublicPricingRules;
+  /** Present only for a super admin session — the server omits it for a customer. */
+  payments?: { methods: PaymentMethod[] };
 }
 
 export interface DashboardSummary {
@@ -205,11 +221,11 @@ export interface ActivityItem {
   at: string;
   description: string;
   actor: string;
-  refId: string;
+  refId: number | null;
 }
 
 export interface EndingSoonItem {
-  sessionId: string;
+  sessionId: number;
   consoleCode: string;
   customerName: string;
   endsAt: string;
@@ -232,7 +248,7 @@ export interface ReportsSummary {
 
 export interface ReportRow { date: string; revenue: number; transactions: number; sessions: number; minutes: number }
 export interface UnitReport {
-  consoleId: string; code: string; consoleType: ConsoleType; roomType: RoomType;
+  consoleId: number; code: string; consoleType: ConsoleType; roomType: RoomType;
   sessions: number; minutes: number; revenue: number; utilizationPct: number;
 }
 

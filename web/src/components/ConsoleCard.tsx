@@ -1,4 +1,4 @@
-import { Clock3, Gamepad2, Wrench, Play, Plus, Square } from 'lucide-react';
+import { Check, Clock3, Gamepad2, Wrench, Play, Plus, Square } from 'lucide-react';
 import { Badge, StatusBadge } from './Badge';
 import { Button } from './Button';
 import { Timer } from './Timer';
@@ -8,17 +8,17 @@ import type { ConsoleStatus, ConsoleType, RoomType } from '../lib/types';
 
 export interface ConsoleCardProps {
   console: {
-    id: string; code: string; consoleType: ConsoleType; roomType: RoomType;
+    id: number; code: string; consoleType: ConsoleType; roomType: RoomType;
     controllers: number; hourlyRate: number; status: ConsoleStatus;
     conditionNote?: string | null;
   };
-  session?: { id: string; customerName: string; endsAt: string; status: 'active' | 'overdue' } | null;
+  session?: { id: number; customerName: string; endsAt: string; status: 'active' | 'overdue' } | null;
   selected?: boolean;
   busy?: boolean;
-  onStart?: (consoleId: string) => void;
-  onExtend?: (sessionId: string) => void;
-  onFinish?: (sessionId: string) => void;
-  onOpenDetail?: (consoleId: string) => void;
+  onStart?: (consoleId: number) => void;
+  onExtend?: (sessionId: number) => void;
+  onFinish?: (sessionId: number) => void;
+  onOpenDetail?: (consoleId: number) => void;
   variant?: 'compact' | 'full';
   warnMinutes?: number[];
 }
@@ -69,7 +69,14 @@ export function ConsoleCard({
             unit.code
           )}
         </h3>
-        <StatusBadge value={status} map={CONSOLE_STATUS} />
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          {/* The selection is never colour-only: the ring alone would not be
+              legible to everyone, so the chosen unit says so (WCAG 1.4.1). */}
+          {selected && (
+            <Badge tone="accent" withIcon={<Check className="size-3.5" aria-hidden="true" />}>Dipilih</Badge>
+          )}
+          <StatusBadge value={status} map={CONSOLE_STATUS} />
+        </div>
       </div>
 
       <p className="mt-1 text-body-sm text-text-secondary">

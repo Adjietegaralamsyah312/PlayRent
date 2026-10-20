@@ -24,7 +24,7 @@ export function Beranda() {
   const cfg = useAsync(() => settings.getPublic(), []);
 
   const now = toJakartaDateTimeStr();
-  const codeOf = (consoleId: string) => units.data?.items.find((u) => u.id === consoleId)?.code ?? '—';
+  const codeOf = (consoleId: number) => units.data?.items.find((u) => u.id === consoleId)?.code ?? '—';
 
   // The next slot: still open, not expired, and its start time is still ahead
   // of us — a booking whose hour has passed today is not "berikutnya" (DS-010 M1).

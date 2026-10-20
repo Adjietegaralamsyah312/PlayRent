@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Ban, CheckCircle2, Eye, Plus, Search, TimerReset } from 'lucide-react';
 import { PageHeader } from '../components/AppShell';
@@ -16,7 +16,7 @@ import { Timer } from '../components/Timer';
 import { ExtendDialog, FinishDialog, toExtendTarget, toFinishTarget } from '../components/session-dialogs';
 import type { ExtendTarget, FinishTarget } from '../components/session-dialogs';
 import { sessions } from '../lib/api';
-import { formatDurationShort, formatIDR, formatJakarta } from '../lib/format';
+import { elapsedMinutes, formatDurationShort, formatIDR, formatJakarta } from '../lib/format';
 import { SESSION_STATUS, effectiveSessionStatus } from '../lib/status';
 import { useAuth } from '../lib/auth';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -43,6 +43,14 @@ function isLive(s: RentalSession): boolean {
   return st === 'active' || st === 'overdue';
 }
 
+/**
+ * A running session has no bill yet (`billedMinutes` is null), so the column
+ * shows the minutes that have run instead of a misleading "0m" (FE-012).
+ */
+function billedOrElapsed(s: RentalSession): number | null {
+  return isLive(s) ? elapsedMinutes(s.startedAt) : s.billedMinutes;
+}
+
 export function SessionBoard() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -58,6 +66,14 @@ export function SessionBoard() {
   const query = useDebounced(search, 300);
   const [page, setPage] = useState(1);
 
+  // ponytail: the "running minutes" column needs a clock. The <Timer> cell
+  // ticks itself and never re-renders this table, so the page ticks instead.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const list = useAsync(
     () => sessions.list({ status: STATUS_PARAM[tab], q: query || undefined, page, limit: LIMIT }),
     [tab, query, page],
@@ -66,9 +82,9 @@ export function SessionBoard() {
   const [extendTarget, setExtendTarget] = useState<ExtendTarget | null>(null);
   const [finishTarget, setFinishTarget] = useState<FinishTarget | null>(null);
   const [voidTarget, setVoidTarget] = useState<RentalSession | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
-  async function openDialog(kind: 'extend' | 'finish', sessionId: string) {
+  async function openDialog(kind: 'extend' | 'finish', sessionId: number) {
     setBusyId(sessionId);
     try {
       const { session } = await sessions.get(sessionId);
@@ -132,7 +148,7 @@ export function SessionBoard() {
       header: 'Durasi',
       numeric: true,
       hideOnMobile: true,
-      render: (s) => `${formatDurationShort(s.billedMinutes)} / ${formatDurationShort(s.plannedMinutes)}`,
+      render: (s) => `${formatDurationShort(billedOrElapsed(s))} / ${formatDurationShort(s.plannedMinutes)}`,
     },
     {
       key: 'rate',

@@ -12,7 +12,6 @@ import { ConfirmDialog, Modal } from '../components/Modal';
 import { Tabs } from '../components/Tabs';
 import { settings as settingsApi } from '../lib/api';
 import { formatDurationShort, formatIDR } from '../lib/format';
-import { useSettings } from '../lib/settings-context';
 import { useToast } from '../lib/toast';
 import { errorMessage, useAsync } from '../lib/useAsync';
 import type { ConsoleType, DurationPackage, PaymentMethod, Settings } from '../lib/types';
@@ -42,7 +41,7 @@ const TYPE_OPTIONS = [
 ];
 
 interface PackageDraft {
-  id: string | null;
+  id: number | null;
   name: string;
   durationMinutes: string;
   price: string;
@@ -66,7 +65,14 @@ function clone(s: Settings): SettingsShape {
 }
 
 export function Settings() {
-  const { settings, loading, error, reload } = useSettings();
+  // The app-wide provider serves the public shape (customers included). This
+  // admin page needs the full one — the overtime tariff and the payment
+  // methods the server only sends to a super admin (FE-019).
+  const settingsAsync = useAsync(() => settingsApi.get(), []);
+  const settings = settingsAsync.data;
+  const loading = settingsAsync.loading;
+  const error = settingsAsync.error;
+  const reload = settingsAsync.reload;
   const { success, error: toastError } = useToast();
 
   const [tab, setTab] = useState('business');

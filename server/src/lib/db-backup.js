@@ -11,12 +11,22 @@ import { randomBytes } from 'node:crypto'
 
 // Schema version this build is able to open. MUST equal MIGRATIONS.length in
 // src/db.js — test/be005-backup.test.js asserts the two stay in sync so a new
-// migration cannot slip through unnoticed. v3 (revoke the sessions of the
-// deactivated accounts) is the third step, so the schema is now at 3.
-export const CURRENT_SCHEMA_VERSION = 3
+// migration cannot slip through unnoticed. v4 (the single business_settings
+// row) is the fourth step, so the schema is now at 4.
+export const CURRENT_SCHEMA_VERSION = 4
 
 // Tables a PlayRent database must have for the snapshot to be usable.
 export const REQUIRED_TABLES = ['users', 'business_settings']
+
+// Columns the money path reads. A DB that predates them is rejected up front
+// instead of blowing up with a 500 the first time an operator opens a page.
+export const REQUIRED_COLUMNS = {
+  business_settings: [
+    'business_name', 'min_duration_minutes', 'rounding_minutes',
+    'overtime_rate_per_hour', 'overtime_grace_minutes', 'default_hourly_rate',
+    'warn_minutes_json', 'payment_methods_json',
+  ],
+}
 
 /** Backups live next to the database they came from: <db dir>/backups. */
 export const backupsDir = (dbPath) => join(dirname(dbPath), 'backups')
@@ -71,6 +81,17 @@ export function inspectDatabase(path) {
     if (missing.length) {
       out.error = `tabel tidak lengkap: ${missing.join(', ')}`
       return out
+    }
+    for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+      if (!out.tables.includes(table)) continue
+      const present = new Set(
+        db.prepare('SELECT name FROM pragma_table_info(?)').all(table).map((r) => r.name),
+      )
+      const missingCols = columns.filter((c) => !present.has(c))
+      if (missingCols.length) {
+        out.error = `kolom tidak lengkap di ${table}: ${missingCols.join(', ')}`
+        return out
+      }
     }
     out.userVersion = db.prepare('PRAGMA user_version').get()?.user_version ?? 0
     if (out.userVersion < 1) {

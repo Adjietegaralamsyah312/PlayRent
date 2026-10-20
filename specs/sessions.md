@@ -62,11 +62,24 @@ Stacked: back/title header → **timer hero** → meta definition list → price
 
 | Write | Body | Effect on UI |
 | --- | --- | --- |
-| `POST /api/sessions/quote` | `{consoleId, durationMinutes, startedAt?, extraMinutes?}` | price preview only; **no writes** |
+| `POST /api/sessions/quote` | **dua jalur** (lihat catatan di bawah) | price preview only; **no writes** |
 | `POST /api/sessions` | `{consoleId, customerName, customerContact?, durationMinutes, notes?, startedAt?}` | `201 {session}` → reload board, toast, open detail |
 | `POST /api/sessions/:id/extend` | `{extraMinutes}` | `{session}` → `endsAt` moves; re-render timer from new `endsAt` |
 | `POST /api/sessions/:id/finish` | `{paymentMethod, amountPaid, discount?, discountReason?, extraCharge?, notes?}` | `201 {transaction}` → console returns to `available` |
 | `POST /api/sessions/:id/void` | `{reason}` (admin only) | `{session}` → `void`, console `available` |
+
+**`POST /sessions/quote` — two paths.** The body accepts either `sessionId` **or** `consoleId` + `durationMinutes`; one of them is required.
+
+| Path | Body | What is computed |
+| --- | --- | --- |
+| **Session** | `{sessionId, extraMinutes?}` | planned = `session.planned_minutes + extraMinutes` · rate = `session.rate_snapshot` · `actual` = minutes since `session.started_at` → **real overtime** |
+| **Plan** | `{consoleId, durationMinutes, startedAt?, extraMinutes?}` | planned = `durationMinutes + extraMinutes` · rate = `console.hourly_rate` · `actual` = `startedAt ? minutes since startedAt : planned` |
+
+`extraMinutes` **always extends the planned duration** — it is never the overtime minutes. Errors: `404 SESSION_NOT_FOUND`, `409 SESSION_NOT_ACTIVE`, `400 VALIDATION_ERROR` (neither `sessionId` nor a plan), `404 CONSOLE_NOT_FOUND`.
+
+**`?status=overdue` works.** `GET /sessions` and `GET /sessions/active` call `markOverdue(db)` before filtering, so a session whose `endsAt` has passed **no longer shows up as `active`** and **does** show up under `?status=overdue`. This filter used to be permanently empty.
+
+**`startedAt` is bounded.** `POST /sessions` rejects a `startedAt` more than **24 hours in the past** or more than **5 minutes in the future** → `400 VALIDATION_ERROR`. The bound is deliberately wide so a late entry still works; its purpose is to stop a single mis-typed entry (or a skewed client clock) from inflating the overtime without limit.
 
 **Field placement.** `consoleCode` is the primary identifier everywhere (never the id). `customerName` is secondary. `endsAt` drives the timer. `plannedMinutes` vs `billedMinutes` are shown as *"Paket 60 menit"* vs *"Dihitung 60 menit"* on the finish sheet so the rounding rule is visible, not a surprise. `rateSnapshot` is labelled *"Tarif saat sesi dimulai"* on the finish sheet and in detail — later settings changes must visibly not apply (`ARCHITECTURE.md` rule).
 
@@ -113,7 +126,7 @@ Stacked: back/title header → **timer hero** → meta definition list → price
 
 **Announcement.** An `aria-live="polite"` span announces **once per threshold crossing** — *"PS-01, sisa waktu 5 menit."* / *"PS-01 telah melewati waktu."* It never updates per second (that would flood a screen reader). Implemented by remembering the lowest crossed `warnMinutes` value in a per-session ref, exactly as `Timer` specifies in `specs/components.md`.
 
-**Overdue persistence.** `session.status` becomes `overdue` server-side on read (`api-contract.md` S2 note). The UI treats `overdue` and a negative derived remainder as the same state and shows the same treatment, so a stale status field cannot hide a late session.
+**Overdue persistence.** `session.status` becomes `overdue` server-side on read (`api-contract.md` S2 note). The UI treats `overdue` and a negative derived remainder as the same state and shows the same treatment, so a stale status field cannot hide a late session. The server marks overdue **before** filtering, so `?status=overdue` actually returns those sessions and `?status=active` no longer does.
 
 ---
 
@@ -134,9 +147,9 @@ Presented as a `Stepper` at ≥ 768 and as a single scrolling form with **sticky
 - **Paket chips** from `GET /api/packages` filtered to `isActive` and (`consoleType === null || consoleType === selected.consoleType`), rendering `name` + `Rp 25.000` (`.tnum`). Selecting a chip sets `durationMinutes` from the package.
 - **Atau durasi khusus**: `Input label="Durasi (menit)" inputMode="numeric" size="lg"` with suffix `menit`. Hint shows the rules: *"Minimal 30 menit · dibulatkan ke atas per 15 menit"* (values from `rules.minDurationMinutes` / `rules.roundingMinutes`). Quick-add buttons `+15 +30 +60` for a cashier with a queue.
 - Validation: `< rules.minDurationMinutes` → *"Durasi minimal 30 menit."* (the `400 DURATION_BELOW_MINIMUM` message from the server is authoritative and identical). Non-numeric or empty → *"Isi durasi dalam menit."* Max 1440 → *"Durasi maksimal 1440 menit."*
-- `startedAt` defaults to now (Jakarta). Not user-editable from this flow — a backdated start is an admin operation, not a counter one. (Documented limitation.)
+- `startedAt` defaults to now (Jakarta). Not user-editable from this flow — a backdated start is an admin operation, not a counter one. (Documented limitation.) When an admin *does* send it (e.g. a late entry), the server accepts a window of **24 hours back to 5 minutes forward** only (§3) — anything outside is rejected with `400 VALIDATION_ERROR`.
 
-**Price preview (live).** Every change to `consoleId` or `durationMinutes` (debounced 300 ms) calls `POST /api/sessions/quote` with `{consoleId, durationMinutes}`. The panel shows:
+**Price preview (live).** Every change to `consoleId` or `durationMinutes` (debounced 300 ms) calls `POST /api/sessions/quote` with `{consoleId, durationMinutes}` — the **plan** path. The panel shows:
 
 ```
 Tarif unit              Rp 25.000 / jam
@@ -146,6 +159,8 @@ Subtotal                Rp 25.000
 Perkiraan total         Rp 25.000
 ```
 Fields come straight from the response: `hourlyRate`, `billableMinutes`, `subtotal`, `(overtimeAmount)`, `(discount)`, `total`, `currency`. `overtimeMinutes`/`overtimeAmount`/`discount` are hidden at 0.
+
+> On this path `overtimeMinutes` is structurally 0 (a plan has no actual elapsed time), so the "Kelebihan" row never appears here. Overtime is only visible via the **session** path (§7.1/§7.2), which quotes against a running session.
 
 - While the quote is in flight: the total area shows a `Skeleton variant="text"` — **never a stale number**, never a 0 that later jumps.
 - If the quote fails: total area shows `--color-text-muted` *"Perkiraan harga belum tersedia"* + `caption` with the error, and the **Konfirmasi** button stays enabled (the server computes the authoritative amount anyway per `ARCHITECTURE.md` rule 1). `caption` under the total, always: *"Jumlah akhir dihitung server saat sesi selesai."*
@@ -164,7 +179,8 @@ Fields come straight from the response: `hourlyRate`, `billableMinutes`, `subtot
 Trigger: **"Tambah Waktu"** on the session card / detail.
 - `Modal size="sm"`: title *"Tambah waktu — PS-01"*, current timer, current `endsAt` *"Selesai 20.15"*.
 - Choices: chips `+15 +30 +60 menit` and `Input label="Tambahan (menit)" inputMode="numeric"` (mutually exclusive; chip fills the input).
-- Live preview via `POST /api/sessions/quote` with `{consoleId, durationMinutes: session.plannedMinutes, extraMinutes}` → shows `billableMinutes`, `subtotal`, and the new projected `endsAt`.
+- Live preview via `POST /api/sessions/quote` with `{sessionId, extraMinutes}` — the **session** path, so the quote uses the session's `rateSnapshot` and the real elapsed time. Shows `billableMinutes`, `subtotal`, and the new projected `endsAt`.
+  - The extension cost = `quote({sessionId, extraMinutes})` − `quote({sessionId})`. The client does **not** compute its own cost — the difference can legitimately be 0 (e.g. when the rental rate equals the overtime rate, the overtime minutes are moved into the planned minutes), and a 0 is displayed as-is.
 - Validation: `extraMinutes >= 1` → else *"Tambahan waktu minimal 1 menit."* Max 1440.
 - Confirm **"Tambah Waktu"** → `POST /api/sessions/:id/extend {extraMinutes}`.
   - Button enters `loading` with label **"Memproses…"** and is disabled (double-submit guard, §9).
@@ -178,7 +194,10 @@ Trigger: **"Tambah Waktu"** on the session card / detail.
 1. Title *"Selesaikan Sesi — PS-01"* + customer name.
 2. **Breakdown** (values from the server at finish time; shown as read-only rows):
    `Durasi paket 60 menit` · `Waktu berjalan 1j 12m` · `Dihitung 75 menit` · `Tarif Rp 25.000/jam` (`rateSnapshot`, labelled *"Tarif saat sesi dimulai"*) · `Subtotal Rp 31.250` · `Overtime 12 menit Rp 5.000` (shown only when > 0) · `Biaya tambahan Rp 0` · `Diskon Rp 0` · **`Total Tagihan Rp 31.250`** in `--text-num-xl` `.tnum`.
-   - Until the user confirms, the amounts are the **client's last quote + derived overtime**, clearly marked with `caption` *"Perkiraan. Jumlah akhir dihitung server."*; on submit, the response's `transaction.total` is what is rendered, replacing the estimate.
+   - **The estimate is the server's quote, not a client computation.** The dialog calls `POST /api/sessions/quote` with `{sessionId}` (the session path) — `rateSnapshot`, real elapsed time, real overtime. The dialog total = `subtotal + overtimeAmount + extraCharge − min(discount, gross)` (the same cap as the server). There is **no client-side overtime estimate** any more, so the preview and the invoice read the same numbers and the difference is Rp 0.
+   - The same applies to an extension: the dialog total uses `quote({sessionId, extraMinutes})` minus `quote({sessionId})`.
+   - The breakdown block always carries the caption *"Perkiraan. Jumlah akhir dihitung server."*
+   - Until the user confirms, the amounts are the **last quote from the server**; on submit, the response's `transaction.total` replaces that estimate.
 3. **Biaya tambahan** — `Input label="Biaya tambahan" prefix="Rp" inputMode="numeric"` + `Input label="Keterangan biaya"` (required if the charge > 0 → *"Isi keterangan biaya tambahan."*). Admin/authorised only; hidden for cashier (documented: server also rejects it from cashier).
 4. **Diskon** — `Input label="Diskon" prefix="Rp" inputMode="numeric"` + `Input label="Alasan diskon"` (required if > 0 → *"Isi alasan diskon."*). Admin/authorised only; hidden for cashier.
 5. **PaymentMethodPicker** — required, labels Tunai / Transfer Bank / QRIS, only methods present in `settings.payments.methods`. Validation: none chosen → *"Pilih metode pembayaran."*

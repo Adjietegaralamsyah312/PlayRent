@@ -2,9 +2,13 @@ import { CalendarX, Gamepad2 } from 'lucide-react';
 import { Button } from './Button';
 import { EmptyState, Skeleton } from './Feedback';
 import { EFFECTIVE_BOOKING_STATUS, effectiveBookingStatus } from '../lib/status';
+import type { EffectiveBookingStatus } from '../lib/status';
 import { TONE_CLASS } from './types';
 import { blockGeometry, timeToMinutes } from '../lib/timeline';
 import type { Booking, ConsoleUnit } from '../lib/types';
+
+/** Bookings that may share a slot with a live one — they never cover it. */
+const INACTIVE_BOOKING_STATUS: EffectiveBookingStatus[] = ['cancelled', 'completed', 'checked_in'];
 
 export interface BookingTimelineProps {
   consoles: ConsoleUnit[];
@@ -119,6 +123,10 @@ export function BookingTimeline({
                     const label = `Booking ${booking.customerName}, ${console.code}, ${range}, ${meta.label}`;
                     // Below 24px a 30-min block is untappable; 44px would overstate its duration.
                     const atEnd = left + width >= 99.9;
+                    // A finished / cancelled / checked-in booking may sit in the
+                    // same slot as a live one. It must not cover the live block,
+                    // or the operator cannot open or cancel it (FE-018).
+                    const dimmed = INACTIVE_BOOKING_STATUS.includes(effectiveBookingStatus(booking));
                     return (
                       <button
                         key={booking.id}
@@ -136,6 +144,7 @@ export function BookingTimeline({
                           'absolute inset-y-0 flex items-center gap-1 overflow-hidden rounded-[var(--radius-md)] px-1.5 text-left text-caption font-medium',
                           'transition-[filter] duration-fast hover:brightness-110',
                           edge !== 'inside' && 'ring-1 ring-inset ring-[var(--color-border-strong)]',
+                          dimmed ? 'z-0 opacity-60' : 'z-10',
                           TONE_CLASS[meta.tone],
                         ].join(' ')}
                       >

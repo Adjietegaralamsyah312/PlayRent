@@ -66,12 +66,25 @@ export function seedBase(db) {
   // Deactivated legacy account: same generic 401 as a wrong password.
   insUser.run(INACTIVE.username, 'Kasir PlayRent', INACTIVE_HASH.hash, INACTIVE_HASH.salt, 'user', 0, null, t, t)
 
+  // Migration v4 already creates the settings row — upsert so the test
+  // fixture stays authoritative instead of colliding with it.
   db.prepare(
     `INSERT INTO business_settings
      (id, business_name, address, phone, receipt_footer, tax_note,
       min_duration_minutes, rounding_minutes, overtime_rate_per_hour, overtime_grace_minutes,
       default_hourly_rate, warn_minutes_json, payment_methods_json, updated_at)
-     VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(id) DO UPDATE SET
+       business_name = excluded.business_name, address = excluded.address,
+       phone = excluded.phone, receipt_footer = excluded.receipt_footer,
+       tax_note = excluded.tax_note, min_duration_minutes = excluded.min_duration_minutes,
+       rounding_minutes = excluded.rounding_minutes,
+       overtime_rate_per_hour = excluded.overtime_rate_per_hour,
+       overtime_grace_minutes = excluded.overtime_grace_minutes,
+       default_hourly_rate = excluded.default_hourly_rate,
+       warn_minutes_json = excluded.warn_minutes_json,
+       payment_methods_json = excluded.payment_methods_json,
+       updated_at = excluded.updated_at`,
   ).run(
     'PlayRent Test', '', '', 'Terima kasih!', '',
     30, 15, 12000, 5, 15000, '[10,5,1]', '["cash","transfer","qris"]', t,

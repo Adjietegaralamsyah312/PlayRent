@@ -16,7 +16,7 @@
    Each cell = `caption` label above a `num` value (`.tnum`), with a 8 px status dot in the cell's status colour. Values from `summary.units.{total,available,inUse,reserved,maintenance}`. Tapping a cell navigates to `/unit?status=<value>`. Horizontal scroll at 360 with the last cell half-visible as the affordance.
 3. **Hari Ini row** — three values from `summary.today`: `Sesi 14` · `Transaksi 9` · `Pendapatan Rp 1.240.000`. Same dense treatment, one row, `.tnum`. **The revenue figure is labelled "Pendapatan tercatat"** — `plan.md` §K demands recorded revenue be distinguishable from estimates, and this label is the first place that distinction appears.
 4. **Sesi segera selesai** — from `GET /api/dashboard/ending-soon`. Cards (up to 5), each: console code (`h3`) + customer name (`body-sm`) + live `Timer` + **"Tambah Waktu"** button + **"Detail"** link. Sorted overdue → critical → warn, then by `remainingSeconds` ascending. `aria-live="polite"` region so a newly-ending session is announced.
-5. **Grafik pendapatan** — `Chart type="bar"` from `GET /api/dashboard/revenue-chart?groupBy=day|week|month` (`buckets[].label, revenue, transactions`). Grouping follows the selected range: ≤ 31 days → `day`, ≤ 180 days → `week`, else `month`. Chart appearance per `DESIGN.md` §8.
+5. **Grafik pendapatan** — `Chart type="bar"` from `GET /api/dashboard/revenue-chart?groupBy=day|week|month` (`buckets[].label, revenue, transactions`). Grouping follows the selected range: ≤ 31 days → `day`, ≤ 180 days → `week`, else `month`. **Empty buckets are still returned** — the server builds the period list for the whole range first and then fills it, so a day/week/month without transactions appears as a 0-valued bucket and the x-axis never skips. Chart appearance per `DESIGN.md` §8.
 6. **Jam ramai** — `Chart type="line"` from `GET /api/dashboard/busy-hours` (`hours[].hour, sessions, revenue`). X axis labels `00`…`23` (at most 7 shown, every 4th hour). Value shown is `sessions` by default with a `Tabs` toggle `Sesi | Pendapatan` in the section header.
 7. **Aktivitas terbaru** — from `GET /api/dashboard/activity`, last 20 `{type, at, description, actor, refId}`. A vertical list, **not** cards: a 2 px `--color-border` timeline rule with an icon node per row (`PlayCircle` session_started · `CircleCheck` session_finished · `CalendarPlus` booking_created · `Ban` transaction_voided), `description` in `body`, `actor` + Jakarta time in `caption`. A `voided` row uses `--color-danger-text` and is visible to admin only.
 8. **Quick actions** (`StickyActionBar`, < 640) — **"Mulai Sesi"** (primary) + **"Booking Baru"** (secondary). At ≥ 768 these move into the page header.
@@ -30,11 +30,15 @@ Desktop (≥ 1280): 12-column grid — metric strip full width; ending-soon (spa
 | `GET /api/dashboard/summary` | `units.{total,available,inUse,reserved,maintenance}`, `today.{sessions,revenue,transactions}`, `range.{revenueToday,revenueWeek,revenueMonth}` |
 | `GET /api/dashboard/activity` | `items[].{type,at,description,actor,refId}` |
 | `GET /api/dashboard/ending-soon` | `items[].{sessionId,consoleCode,customerName,endsAt,remainingSeconds,severity}` |
-| `GET /api/dashboard/revenue-chart` | `?from&to&groupBy=day\|week\|month` → `buckets[].{label,revenue,transactions}` |
-| `GET /api/dashboard/busy-hours` | `?from&to` → `hours[].{hour,sessions,revenue}` |
+| `GET /api/dashboard/revenue-chart` | `?from&to&groupBy=day\|week\|month` → `buckets[].{label,revenue,transactions}` — **empty buckets are filled with 0**; without `from`/`to` the default window is the **last 30 days** |
+| `GET /api/dashboard/busy-hours` | `?from&to` → `hours[].{hour,sessions,revenue}` — without `from`/`to` the default window is the **last 30 days** |
 | `GET /api/settings` | `business.name` (greeting/header), `rules.warnMinutes` (timer escalation) |
 
 `range.revenueToday/revenueWeek/revenueMonth` are rendered as a `caption` line under the *Hari Ini* row: *"Minggu ini Rp 7.850.000 · Bulan ini Rp 28.400.000"* — `.tnum`, `--color-text-secondary`. **Zero hardcoded figures** (`api-contract.md` D-note); if a fetch fails the number region shows `—`, never `0`.
+
+**`revenueWeek` = the 7 days of the current ISO week** (Monday–Sunday, Jakarta time) — not 7 rolling days. An ISO week can cross the calendar-year boundary (`2026-W01` starts 2025-12-29), so days from the previous year are counted too. `revenueMonth` uses the current Jakarta calendar month. Both are queried for their own range instead of filtering every transaction since January.
+
+**Range limit.** Both chart endpoints are capped at **365 days**; `from > to` or a wider range → **400 `VALIDATION_ERROR`** with a message naming the width. This differs from `/reports/*`, which accepts an unbounded range.
 
 ## 3. States
 
@@ -47,6 +51,7 @@ Desktop (≥ 1280): 12-column grid — metric strip full width; ending-soon (spa
 | **Empty — charts** | axis box retained, centred `body-sm` *"Belum ada data pada rentang ini."* + **"Ubah rentang"** action opening the `DateRangePicker`. |
 | **Empty — no consoles at all** | if `units.total === 0`, replace regions 2–7 with one `EmptyState`: *"Belum ada unit PS"* / *"Tambahkan unit PS4 atau PS5 untuk mulai mencatat rental."* / **"Tambah Unit"** (admin) or `caption` *"Hubungi admin untuk menambahkan unit."* (cashier). |
 | **Error (per region)** | inline block inside that region: `TriangleAlert` + *"Gagal memuat {nama bagian}."* + **"Coba Lagi"**. Other regions keep their data. |
+| **Error (rentang terlalu lebar)** | the server answers **400 `VALIDATION_ERROR`** when the range exceeds 365 days or `from > to`. The chart region shows a message naming the width (not a generic error) plus a **"Persempit rentang"** action that opens the `DateRangePicker`. The other regions keep their data. |
 | **Error (total failure)** | if all three of `summary`/`ending-soon`/`activity` fail, one page-level `EmptyState variant="error"`: *"Tidak dapat memuat dashboard."* / *"Periksa koneksi ke server lalu coba lagi."* / **"Coba Lagi"** |
 | **Success** | after **Tambah Waktu** → toast *"Waktu ditambah 30 menit — PS-01 selesai 21.15."*; the row's timer immediately re-renders from the new `endsAt` |
 | **Disabled** | a metric cell for a status with 0 units stays interactive (navigates to an empty filtered list) — a disabled cell hides a legitimate destination |
@@ -62,6 +67,8 @@ Only one input surface: the **DateRangePicker** in the header.
 | to | **Sampai tanggal** | yes | empty → *"Pilih tanggal akhir."*; `from > to` → *"Tanggal mulai tidak boleh melewati tanggal akhir."* |
 
 Presets: Hari Ini · Kemarin · 7 Hari Terakhir · Bulan Ini · Bulan Lalu. Selecting a preset fills both fields and refetches only the two charts. Navigator clamped with `maxDate = today (Jakarta)`.
+
+The maximum range the server accepts is **365 days**; anything wider → 400 `VALIDATION_ERROR` (see §3). The UI validates the same thing before the request so the message that appears is specific rather than generic.
 
 ## 5. Interactions
 

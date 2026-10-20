@@ -69,7 +69,10 @@ function Plot({ type, data, valueKind, max, height, ariaLabel, ariaSummary, onPo
     return () => observer.disconnect();
   }, []);
 
-  const atX = (i: number) => (box ? (n > 1 ? (i / (n - 1)) * box.w : box.w / 2) : 0);
+  // Every x position comes from the same mapping: the centre of the column the
+  // point belongs to. The hit-target buttons, the x-axis labels and the tooltip
+  // all use it, so a dot sits exactly above its own button (FE-016).
+  const atX = (i: number) => (box ? ((i + 0.5) / n) * box.w : 0);
   const atY = (v: number) => (box ? box.h - (v / max) * box.h * 0.96 : 0);
   const linePoints = box ? data.map((d, i) => `${atX(i)},${atY(d.value)}`).join(' ') : '';
 
@@ -139,7 +142,9 @@ function Plot({ type, data, valueKind, max, height, ariaLabel, ariaSummary, onPo
             {type === 'line' && hover === i && (
               <span
                 className="absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan ring-2 ring-[var(--color-surface)]"
-                style={{ left: `${(atX(i) / (box?.w || 1)) * 100}%`, top: `${(atY(d.value) / (box?.h || 1)) * 100}%` }}
+                // The button IS the column, so the dot sits at its centre — the
+                // same x as the line point and the tooltip.
+                style={{ left: '50%', top: `${(atY(d.value) / (box?.h || 1)) * 100}%` }}
                 aria-hidden="true"
               />
             )}

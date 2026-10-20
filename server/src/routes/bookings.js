@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { AppError, ok, created, isUniqueViolation } from '../lib/errors.js'
-import { parse, idParam, isoDate, hhmm } from '../lib/validate.js'
+import { parse, idParam, isoDate, hhmm, likePattern } from '../lib/validate.js'
 import { mapBooking, sessionById } from '../lib/mappers.js'
 import { requireAuth, requireSuperAdmin, isSuperAdmin } from '../lib/auth.js'
 import { logAudit } from '../lib/audit.js'
@@ -96,7 +96,7 @@ export default function bookingsRoutes(db) {
     if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) { where.push('booking_date <= ?'); params.push(to) }
     if (STATUSES.includes(status)) { where.push('status = ?'); params.push(status) }
     if (consoleId) { where.push('console_id = ?'); params.push(Number(consoleId)) }
-    if (q) { where.push('(customer_name LIKE ? OR customer_contact LIKE ?)'); params.push(`%${q}%`, `%${q}%`) }
+    if (q) { where.push("(customer_name LIKE ? ESCAPE '\\' OR customer_contact LIKE ? ESCAPE '\\')"); params.push(likePattern(q), likePattern(q)) }
     // A customer only ever sees their own bookings — the scope is server-side
     // and cannot be widened by a query parameter.
     if (!isSuperAdmin(req.user)) { where.push('customer_user_id = ?'); params.push(req.user.id) }
@@ -285,6 +285,12 @@ export default function bookingsRoutes(db) {
       throw new AppError(404, 'BOOKING_NOT_FOUND')
     }
     if (b.status === 'cancelled') throw new AppError(409, 'ALREADY_VOID')
+    // BE-006: a checked-in booking already owns a live session and a busy
+    // unit. Cancelling it would free the slot for a second booking while the
+    // session keeps running. It must be voided through the session instead.
+    if (b.status === 'checked_in' || b.session_id) {
+      throw new AppError(409, 'BOOKING_ALREADY_CHECKED_IN', 'Booking sudah check-in dan tidak bisa dibatalkan')
+    }
     db.prepare("UPDATE bookings SET status = 'cancelled', notes = ?, updated_at = ? WHERE id = ?")
       .run(body.reason ? `${b.notes ? `${b.notes} | ` : ''}Batal: ${body.reason}` : b.notes, nowIso(), id)
     const updated = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id)

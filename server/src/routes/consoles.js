@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { AppError, ok, created, isUniqueViolation } from '../lib/errors.js'
-import { parse, idParam } from '../lib/validate.js'
+import { parse, idParam, likePattern } from '../lib/validate.js'
 import { mapConsole, mapConsolePublic, mapSession } from '../lib/mappers.js'
 import { requireAuth, requireSuperAdmin, isSuperAdmin } from '../lib/auth.js'
 import { logAudit } from '../lib/audit.js'
@@ -35,7 +35,7 @@ export default function consolesRoutes(db) {
     if (status && STATUSES.includes(status)) { where.push('status = ?'); params.push(status) }
     if (type === 'PS4' || type === 'PS5') { where.push('console_type = ?'); params.push(type) }
     if (roomType) { where.push('room_type = ?'); params.push(roomType) }
-    if (q) { where.push('code LIKE ?'); params.push(`%${q}%`) }
+    if (q) { where.push("code LIKE ? ESCAPE '\\'"); params.push(likePattern(q)) }
     const sql = `SELECT * FROM consoles ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY code ASC`
     const rows = db.prepare(sql).all(...params)
     // A customer sees the unit list without internal notes (condition_note).

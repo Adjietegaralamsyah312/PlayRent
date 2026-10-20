@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
+    "seed:schema": "node src/seed-schema.js",
     "admin:bootstrap": "node src/admin-bootstrap.js",
     "backup": "node src/backup.js",
     "restore": "node src/restore.js",

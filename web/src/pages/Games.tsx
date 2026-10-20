@@ -25,7 +25,7 @@ const PLATFORM_OPTIONS = [
 const FORM_PLATFORM_OPTIONS = PLATFORM_OPTIONS.slice(1);
 
 interface Draft {
-  id: string | null;
+  id: number | null;
   title: string;
   platform: GamePlatform;
   genre: string;
@@ -226,10 +226,10 @@ export function Games() {
               <Textarea
                 label="Catatan ketersediaan (opsional)"
                 rows={2}
-                maxLength={200}
+                maxLength={60}
                 value={draft.availabilityNote}
                 onChange={(e) => setDraft({ ...draft, availabilityNote: e.target.value })}
-                helpText="Hanya catatan internal. Sistem tidak memverifikasi kepemilikan game."
+                helpText="Maksimal 60 karakter. Catatan internal — sistem tidak memverifikasi kepemilikan game."
               />
               {draft.id && (
                 <Switch checked={draft.isActive} onCheckedChange={(v) => setDraft({ ...draft, isActive: v })} label="Game aktif" />

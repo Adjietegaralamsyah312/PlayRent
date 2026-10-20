@@ -65,3 +65,40 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
+  # Server regression gate. Runs in PARALLEL with `build` on purpose: a broken
+  # backend must not block the Pages deploy, but it still shows up as a red
+  # check on the run. Make it blocking later by adding `server-test` to the
+  # `needs:` list of `build`.
+  server-test:
+    name: Server tests
+    runs-on: ubuntu-latest
+    needs: []
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 22 LTS: node:sqlite is unflagged since 22.13.0 and the
+      # sqlite.backup() API used by src/lib/db-backup.js needs >= 22.16.0,
+      # so `node-version: 22` (latest 22.x) covers both.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      # `npm test` = `node --test` (auto-discovery). It picks up every
+      # server/test/*.test.js AND server/test/smoke-manual.mjs, because the
+      # Node test runner also matches files under a `test/` directory.
+      - name: Run server tests
+        working-directory: server
+        run: npm test
+

@@ -29,10 +29,12 @@ Layout note: `booking.discount` from `B3` is accepted by the API but the field i
 | `POST /api/bookings` | `{consoleId,customerName,customerContact?,bookingDate,startTime,durationMinutes,notes?,discount?}` → `201 {booking}` |
 | `PATCH /api/bookings/:id` | partial `{customerName?,contact?,bookingDate?,startTime?,durationMinutes?,status?,notes?,consoleId?}` → `{booking}` (any schedule change re-runs the conflict check) |
 | `POST /api/bookings/:id/check-in` | `{durationMinutes?}` → `201 {session}`, booking becomes `checked_in` |
-| `POST /api/bookings/:id/cancel` | `{reason?}` → `{booking}` status `cancelled`, slot released immediately |
+| `POST /api/bookings/:id/cancel` | `{reason?}` → `{booking}` status `cancelled`, slot released immediately. **409 `BOOKING_ALREADY_CHECKED_IN`** when the booking is already checked in (`status = 'checked_in'` or `session_id` is set) — neither the booking nor its session is touched |
 | `GET /api/sessions/active` | to grey out consoles that are currently busy and to decide whether check-in is possible |
 
 **Conflict details** arrive on `409 BOOKING_CONFLICT` as `error.details: [{conflictingBookingId, startTime, endTime}]` — used verbatim in the inline warning (§4).
+
+**Cancelling a booking that is already checked in is refused.** After check-in the slot is occupied by a running session; cancelling the booking would free the schedule while the session is still running. The server answers **409 `BOOKING_ALREADY_CHECKED_IN`** and changes nothing — the operator has to finish (or void) the session first.
 
 ## 3. States
 
@@ -45,6 +47,7 @@ Layout note: `booking.discount` from `B3` is accepted by the API but the field i
 | **Empty (no consoles)** | `EmptyState` — *"Belum ada unit PS"* — *"Tambah unit terlebih dahulu sebelum membuat booking."* — **"Tambah Unit"** |
 | **Error (list)** | inline: `TriangleAlert` + *"Gagal memuat daftar booking."* + **"Coba Lagi"** |
 | **Error (save)** | inside the form; conflict gets the dedicated treatment in §4 |
+| **Error (cancel)** | `409 BOOKING_ALREADY_CHECKED_IN` → the `ConfirmDialog` closes and an error toast reads *"Booking ini sudah check-in, jadi tidak bisa dibatalkan. Selesaikan sesinya dulu."* Neither the booking nor its session changes. |
 | **Success (create)** | toast *"Booking Budi pada PS-01, 19 Okt 2026 20.15 berhasil dibuat."* |
 | **Success (edit)** | toast *"Booking atas nama Budi diperbarui."* |
 | **Success (check-in)** | toast *"Check-in berhasil — sesi PS-01 dimulai."* + navigate to `/sesi/:id` |

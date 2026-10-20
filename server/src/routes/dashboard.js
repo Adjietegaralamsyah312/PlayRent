@@ -1,17 +1,48 @@
 import { Router } from 'express'
-import { ok } from '../lib/errors.js'
+import { ok, AppError } from '../lib/errors.js'
 import { requireAuth, requireSuperAdmin } from '../lib/auth.js'
 import { getSettingsRow, rulesFromRow } from '../lib/settings.js'
 import {
   jakartaDateStr, jakartaDayRangeUtc, jakartaHour, isoWeekStr, jakartaMonthStr,
+  isoWeekRange, jakartaMonthRange, periodLabels, daysBetween, shiftYmd,
 } from '../lib/time.js'
 
 const validYmd = (s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s)
-const rangeFor = (from, to) => {
+
+// BE-016: a dashboard query must never scan an unbounded window. 365 days is
+// more than any operator ever needs on a screen and keeps the work predictable.
+const MAX_RANGE_DAYS = 365
+const DEFAULT_RANGE_DAYS = 30
+
+/**
+ * The window a dashboard query may read. Both bounds are required (a
+ * one-sided range is ignored, as before); a window wider than MAX_RANGE_DAYS
+ * is refused with 400 instead of being scanned.
+ */
+function boundedRange(from, to) {
   if (validYmd(from) && validYmd(to)) {
-    return { startIso: jakartaDayRangeUtc(from).startIso, endIso: jakartaDayRangeUtc(to).endIso }
+    const days = daysBetween(from, to) + 1
+    if (days < 1) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'Rentang tanggal tidak valid: `from` harus sebelum `to`')
+    }
+    if (days > MAX_RANGE_DAYS) {
+      throw new AppError(
+        400,
+        'VALIDATION_ERROR',
+        `Rentang tanggal terlalu lebar (${days} hari). Maksimal ${MAX_RANGE_DAYS} hari per permintaan.`,
+      )
+    }
+    return { from, to, days, startIso: jakartaDayRangeUtc(from).startIso, endIso: jakartaDayRangeUtc(to).endIso }
   }
-  return null
+  const end = jakartaDateStr()
+  const start = shiftYmd(end, -(DEFAULT_RANGE_DAYS - 1))
+  return {
+    from: start,
+    to: end,
+    days: DEFAULT_RANGE_DAYS,
+    startIso: jakartaDayRangeUtc(start).startIso,
+    endIso: jakartaDayRangeUtc(end).endIso,
+  }
 }
 
 export default function dashboardRoutes(db) {
@@ -22,8 +53,6 @@ export default function dashboardRoutes(db) {
   r.get('/summary', (req, res) => {
     const today = jakartaDateStr()
     const { startIso, endIso } = jakartaDayRangeUtc(today)
-    const week = isoWeekStr()
-    const month = jakartaMonthStr()
 
     const unitsRow = db.prepare(
       `SELECT COUNT(*) AS total,
@@ -44,16 +73,28 @@ export default function dashboardRoutes(db) {
       "SELECT COUNT(*) AS c FROM rental_sessions WHERE status != 'void' AND started_at >= ? AND started_at <= ?",
     ).get(startIso, endIso).c
 
-    // Week/month: revenue is bucketed by Jakarta calendar labels, computed in JS from paid rows.
-    const monthRows = db.prepare(
-      "SELECT created_at, total FROM transactions WHERE status != 'void' AND payment_status = 'paid' AND substr(created_at,1,7) >= ?",
-    ).all(month.slice(0, 4) + '-01')
-    let revenueWeek = 0
-    let revenueMonth = 0
-    for (const row of monthRows) {
-      if (isoWeekStr(row.created_at) === week) revenueWeek += row.total
-      if (jakartaMonthStr(row.created_at) === month) revenueMonth += row.total
-    }
+    // Week/month revenue.
+    //
+    // BE-011: the window is the 7 days of the current ISO week (Mon..Sun).
+    // The old query filtered on the UTC month, so on 1-4 January the days of
+    // the week that fall in the previous December were silently dropped.
+    // The week may start in the previous year — never assume the same year.
+    //
+    // BE-016: both windows are bounded (7 and <= 31 days) — no more "every
+    // transaction since January" pulled into memory.
+    const week = isoWeekRange()
+    const month = jakartaMonthRange()
+    const weekStart = jakartaDayRangeUtc(week.start).startIso
+    const weekEnd = jakartaDayRangeUtc(week.end).endIso
+    const monthStart = jakartaDayRangeUtc(month.start).startIso
+    const monthEnd = jakartaDayRangeUtc(month.end).endIso
+
+    const paidRevenue = db.prepare(
+      `SELECT IFNULL(SUM(total), 0) AS revenue FROM transactions
+        WHERE status != 'void' AND payment_status = 'paid' AND created_at >= ? AND created_at <= ?`,
+    )
+    const revenueWeek = paidRevenue.get(weekStart, weekEnd).revenue
+    const revenueMonth = paidRevenue.get(monthStart, monthEnd).revenue
 
     return ok(res, {
       units: {
@@ -120,15 +161,18 @@ export default function dashboardRoutes(db) {
 
   r.get('/revenue-chart', (req, res) => {
     const groupBy = ['day', 'week', 'month'].includes(req.query.groupBy) ? req.query.groupBy : 'day'
-    const range = rangeFor(req.query.from, req.query.to)
-      || (() => { const t = jakartaDateStr(); return { startIso: jakartaDayRangeUtc(t).startIso, endIso: jakartaDayRangeUtc(t).endIso } })()
+    const { from, to, startIso, endIso } = boundedRange(req.query.from, req.query.to)
     const rows = db.prepare(
       `SELECT created_at, total FROM transactions
         WHERE status != 'void' AND payment_status = 'paid' AND created_at >= ? AND created_at <= ?
         ORDER BY created_at ASC`,
-    ).all(range.startIso, range.endIso)
+    ).all(startIso, endIso)
 
+    // BE-007: every period in the window gets a bucket, empty ones included —
+    // a chart that skips quiet days silently lies about the shape of the week.
+    const bucket = groupBy === 'month' ? 'month' : groupBy === 'week' ? 'week' : 'day'
     const buckets = new Map()
+    for (const label of periodLabels(from, to, bucket)) buckets.set(label, { label, revenue: 0, transactions: 0 })
     for (const row of rows) {
       const label = groupBy === 'month' ? jakartaMonthStr(row.created_at)
         : groupBy === 'week' ? isoWeekStr(row.created_at)
@@ -142,13 +186,15 @@ export default function dashboardRoutes(db) {
   })
 
   r.get('/busy-hours', (req, res) => {
-    const range = rangeFor(req.query.from, req.query.to) || { startIso: '0000', endIso: '9999' }
+    // BE-016: the old default read every session ever recorded. The default
+    // window is now the last 30 days, and a wider request is refused.
+    const { startIso, endIso } = boundedRange(req.query.from, req.query.to)
     const rows = db.prepare(
       `SELECT s.started_at, IFNULL(t.total, 0) AS total
          FROM rental_sessions s
          LEFT JOIN transactions t ON t.session_id = s.id AND t.status != 'void'
         WHERE s.status != 'void' AND s.started_at >= ? AND s.started_at <= ?`,
-    ).all(range.startIso, range.endIso)
+    ).all(startIso, endIso)
     const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, sessions: 0, revenue: 0 }))
     for (const row of rows) {
       const h = jakartaHour(row.started_at)

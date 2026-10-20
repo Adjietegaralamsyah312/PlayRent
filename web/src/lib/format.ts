@@ -56,6 +56,16 @@ export function formatDurationShort(minutes: number | null | undefined): string 
   return `${h}j ${rest}m`;
 }
 
+/**
+ * Minutes that have run since an ISO start — floored, never negative.
+ * A running session has no bill yet, so its "elapsed" column shows this.
+ */
+export function elapsedMinutes(startedAt: string | null | undefined): number {
+  if (!startedAt) return 0;
+  const ms = Date.now() - Date.parse(startedAt);
+  return Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 60_000)) : 0;
+}
+
 /** `HH:MM:SS` derived from a second count. HH is NOT capped at two digits. */
 export function formatTimer(seconds: number): string {
   const abs = Math.abs(Math.floor(seconds));
@@ -143,6 +153,16 @@ export function formatRelative(iso: string): string {
   if (min < 1) return 'baru saja';
   if (min < 60) return `${min} menit lalu`;
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h} jam lalu`;
+  if (h < 24) return formatJakarta(iso, 'short');
   return formatJakarta(iso, 'short');
+}
+
+/**
+ * An id from the URL (always a string) or a `<select>` value, normalised to
+ * the NUMBER the API speaks. Anything that is not a positive integer is
+ * `null` — a missing id, never a bogus 0 that would match nothing.
+ */
+export function toId(v: string | number | null | undefined): number | null {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }

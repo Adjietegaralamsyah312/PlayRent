@@ -12,7 +12,7 @@ import { EmptyState } from '../components/Feedback';
 import { StatusBadge } from '../components/Badge';
 import { Tabs } from '../components/Tabs';
 import { reports } from '../lib/api';
-import { formatDurationShort, formatIDR, formatJakarta, shiftDate, toJakartaDateStr } from '../lib/format';
+import { formatDurationShort, formatIDR, formatJakarta, formatNumber, shiftDate, toJakartaDateStr } from '../lib/format';
 import { PAYMENT_METHOD_LABEL, PAYMENT_STATUS } from '../lib/status';
 import { useAsync } from '../lib/useAsync';
 import type { ReportRow, Transaction, UnitReport } from '../lib/types';
@@ -48,7 +48,7 @@ export function Reports() {
   const payments = useAsync(
     () => (tab === 'payments'
       ? reports.payments(range)
-      : Promise.resolve({ items: [] as Transaction[], totals: { count: 0, gross: 0, paid: 0, outstanding: 0 } })),
+      : Promise.resolve({ items: [] as Transaction[], totals: { count: 0, gross: 0, paid: 0, outstanding: 0, voided: 0 } })),
     [tab, range.from, range.to],
   );
 
@@ -82,6 +82,8 @@ export function Reports() {
     { key: 'total', header: 'Total', numeric: true, prominentOnMobile: true, render: (t) => formatIDR(t.total) },
   ];
 
+  // FE-009: the CSV type must be the report the operator is looking at. The
+  // server rejects an unknown type instead of silently exporting transactions.
   function exportCsv() {
     window.location.href = reports.exportCsvUrl({ type: tab, from: range.from, to: range.to });
   }
@@ -198,7 +200,7 @@ export function Reports() {
         <>
           {payments.data?.totals && (
             <PageSection>
-              <div className="grid grid-cols-3 gap-px overflow-hidden rounded-[var(--radius-lg)] border border-border bg-border">
+              <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-lg)] border border-border bg-border lg:grid-cols-4">
                 <div className="bg-surface px-4 py-3">
                   <p className="text-caption text-text-secondary">Total tagihan</p>
                   <p className="mt-1 text-body font-medium tnum text-text">{formatIDR(payments.data.totals.gross)}</p>
@@ -210,6 +212,13 @@ export function Reports() {
                 <div className="bg-surface px-4 py-3">
                   <p className="text-caption text-text-secondary">Belum dibayar</p>
                   <p className="mt-1 text-body font-medium tnum text-warning">{formatIDR(payments.data.totals.outstanding)}</p>
+                </div>
+                <div className="bg-surface px-4 py-3">
+                  <p className="text-caption text-text-secondary">Transaksi dibatalkan</p>
+                  <p className="mt-1 text-body font-medium tnum text-text">
+                    {formatNumber(payments.data.totals.voided)}
+                    <span className="ml-1 text-caption text-text-muted">transaksi</span>
+                  </p>
                 </div>
               </div>
             </PageSection>

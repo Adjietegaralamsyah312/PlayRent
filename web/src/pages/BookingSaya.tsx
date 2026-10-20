@@ -11,7 +11,7 @@ import { Input, Select } from '../components/Form';
 import { ConfirmDialog, Modal } from '../components/Modal';
 import { bookings, consoles, settings } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { formatDurationShort, formatIDR, formatJakarta, toJakartaDateStr } from '../lib/format';
+import { formatDurationShort, formatIDR, formatJakarta, toId, toJakartaDateStr } from '../lib/format';
 import { estimateCost } from '../lib/pricing';
 import { EFFECTIVE_BOOKING_STATUS, effectiveBookingStatus } from '../lib/status';
 import { useToast } from '../lib/toast';
@@ -47,8 +47,8 @@ export function BookingSaya() {
   const [cancelTarget, setCancelTarget] = useState<Booking | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const unitOf = (consoleId: string) => units.data?.items.find((u) => u.id === consoleId);
-  const codeOf = (consoleId: string) => unitOf(consoleId)?.code ?? '—';
+  const unitOf = (consoleId: number) => units.data?.items.find((u) => u.id === consoleId);
+  const codeOf = (consoleId: number) => unitOf(consoleId)?.code ?? '—';
   const rounding = cfg.data?.rules.roundingMinutes ?? 15;
   const minMinutes = cfg.data?.rules.minDurationMinutes ?? 30;
   // The server binds the owner to the session, so a customer may not rename
@@ -92,11 +92,13 @@ export function BookingSaya() {
   async function submit() {
     if (!draft) return;
     const minutes = Number(draft.durationMinutes);
-    if (!draft.consoleId || draft.customerName.trim().length < 2 || !Number.isFinite(minutes) || minutes < minMinutes) return;
+    // A <select> hands back a string; the API wants the console id as a number.
+    const consoleId = toId(draft.consoleId);
+    if (!consoleId || draft.customerName.trim().length < 2 || !Number.isFinite(minutes) || minutes < minMinutes) return;
     setBusy(true);
     try {
       await bookings.create({
-        consoleId: draft.consoleId,
+        consoleId,
         customerName: draft.customerName.trim(),
         customerContact: draft.customerContact.trim() || undefined,
         bookingDate: draft.bookingDate,
@@ -170,7 +172,7 @@ export function BookingSaya() {
 
   const rows = list.data?.items ?? [];
   const unitOptions = (units.data?.items ?? []).map((u) => ({
-    value: u.id,
+    value: String(u.id),
     label: `${u.code} · ${u.consoleType} ${u.roomType} · ${formatIDR(u.hourlyRate)}/jam`,
   }));
 

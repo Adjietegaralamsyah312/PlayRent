@@ -63,7 +63,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const fieldId = id ?? autoId;
   const helpId = `${fieldId}-help`;
   const errorId = `${fieldId}-error`;
-  const describedBy = [error ? errorId : null, helpText ? helpId : null].filter(Boolean).join(' ');
+  // Only point at an id that is actually rendered: the help text is hidden
+  // while the error is shown, so both can never be referenced at once (FE-014).
+  const describedBy = error ? errorId : helpText ? helpId : '';
 
   return (
     <FieldShell id={fieldId} label={label} requiredMark={requiredMark} helpText={helpText} error={error} helpId={helpId} errorId={errorId}>
@@ -112,7 +114,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   const fieldId = id ?? autoId;
   const helpId = `${fieldId}-help`;
   const errorId = `${fieldId}-error`;
-  const describedBy = [error ? errorId : null, helpText ? helpId : null].filter(Boolean).join(' ');
+  // Only point at an id that is actually rendered: the help text is hidden
+  // while the error is shown, so both can never be referenced at once (FE-014).
+  const describedBy = error ? errorId : helpText ? helpId : '';
   const len = typeof value === 'string' ? value.length : 0;
 
   return (
@@ -159,7 +163,9 @@ export function Select<T extends string = string>({
   const fieldId = id ?? autoId;
   const helpId = `${fieldId}-help`;
   const errorId = `${fieldId}-error`;
-  const describedBy = [error ? errorId : null, helpText ? helpId : null].filter(Boolean).join(' ');
+  // Only point at an id that is actually rendered: the help text is hidden
+  // while the error is shown, so both can never be referenced at once (FE-014).
+  const describedBy = error ? errorId : helpText ? helpId : '';
 
   return (
     <FieldShell id={fieldId} label={label} requiredMark={requiredMark} helpText={helpText} error={error} helpId={helpId} errorId={errorId}>
@@ -233,11 +239,13 @@ export interface SwitchProps {
 export function Switch({ checked, onCheckedChange, label, description, disabled, id }: SwitchProps) {
   const autoId = useId();
   const fieldId = id ?? autoId;
+  const labelId = `${fieldId}-label`;
   const descId = description ? `${fieldId}-desc` : undefined;
   return (
     <div className="flex items-center justify-between gap-4">
       <span className="flex flex-col">
-        <label htmlFor={fieldId} className={`text-body-sm ${disabled ? 'text-text-disabled' : 'text-text cursor-pointer'}`}>{label}</label>
+        {/* A <label for> cannot name a button — the switch needs aria-labelledby (FE-013). */}
+        <span id={labelId} className={`text-body-sm ${disabled ? 'text-text-disabled' : 'text-text cursor-pointer'}`}>{label}</span>
         {description && <span id={descId} className="text-caption text-text-muted">{description}</span>}
       </span>
       <button
@@ -245,6 +253,7 @@ export function Switch({ checked, onCheckedChange, label, description, disabled,
         id={fieldId}
         role="switch"
         aria-checked={checked}
+        aria-labelledby={labelId}
         aria-describedby={descId}
         disabled={disabled}
         onClick={() => onCheckedChange(!checked)}

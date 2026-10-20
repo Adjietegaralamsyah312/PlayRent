@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { dbPath } from './config.js'
+import { DEFAULT_SETTINGS_ROW } from './lib/settings.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -135,6 +136,34 @@ function v3_revokeInactiveSessions(db) {
   db.prepare('DELETE FROM auth_sessions WHERE user_id IN (SELECT id FROM users WHERE is_active = 0)').run()
 }
 
+// --- v4: the single business_settings row -----------------------------------
+// BE-001: the settings row was only ever created by the demo seeder, so a
+// production DB built with migrate() alone had NO settings row — every
+// endpoint that reads the price rules (/settings, /sessions/quote,
+// /sessions, /bookings) died with a TypeError -> 500, and the only way out
+// was `npm run seed`, which injected 44 days of fake transactions and a live
+// demo session into the real books.
+//
+// The migration writes one default row (same values the seeder uses) so a
+// fresh install is usable without any demo data. Idempotent: INSERT OR IGNORE
+// never overwrites an existing row.
+
+function v4_businessSettings(db) {
+  const d = DEFAULT_SETTINGS_ROW
+  db.prepare(
+    `INSERT OR IGNORE INTO business_settings
+     (id, business_name, address, phone, receipt_footer, tax_note,
+      min_duration_minutes, rounding_minutes, overtime_rate_per_hour, overtime_grace_minutes,
+      default_hourly_rate, warn_minutes_json, payment_methods_json, updated_at)
+     VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  ).run(
+    d.business_name, d.address, d.phone, d.receipt_footer, d.tax_note,
+    d.min_duration_minutes, d.rounding_minutes, d.overtime_rate_per_hour,
+    d.overtime_grace_minutes, d.default_hourly_rate, d.warn_minutes_json,
+    d.payment_methods_json, new Date().toISOString(),
+  )
+}
+
 // Each entry bumps user_version by one, in order. Add new steps at the end;
 // never edit a shipped step (a DB that already ran it will skip it).
 //
@@ -147,6 +176,7 @@ const MIGRATIONS = [
   },
   v2_superadmin,
   v3_revokeInactiveSessions,
+  v4_businessSettings,
 ]
 
 /** Idempotent. Safe to call on every boot. */

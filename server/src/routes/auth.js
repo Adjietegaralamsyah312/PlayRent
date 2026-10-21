@@ -12,7 +12,8 @@ import {
 
 // AUTH-10: key on the transport socket, not a caller-supplied header. Express's
 // `trust proxy` setting decides whether X-Forwarded-For is honoured at all; it is
-// off unless TRUST_PROXY=true, so a fresh XFF per request no longer mints a bucket.
+// off unless TRUST_PROXY names a hop count (0 = off), so a fresh XFF per request
+// no longer mints a bucket.
 const clientIp = (req) => req.ip || req.socket.remoteAddress || ''
 
 // AUTH-11: the rate-limit bucket is the normalised username so case/whitespace

@@ -173,16 +173,45 @@ Isi `.env` (semuanya punya default yang aman; `.env.example` hanya berisi placeh
 | `PORT` | `4000` | Port HTTP API backend |
 | `DB_PATH` | `./data/playrent.db` | Lokasi file SQLite (relatif ke folder `server/`) |
 | `SESSION_TTL_HOURS` | `12` | Masa berlaku sesi login (sliding — tiap request memperpanjang) |
-| `NODE_ENV` | `development` | `production` mengaktifkan flag `Secure` pada cookie sesi |
-| `CORS_ORIGIN` | `http://localhost:5173` | Origin yang diizinkan CORS (dev Vite) |
-| `TRUST_PROXY` | `false` | Lihat di bawah |
+| `NODE_ENV` | `development` | `production` → flag `Secure` aktif **dan** default `COOKIE_SAME_SITE` jadi `none` |
+| `CORS_ORIGIN` | prod: `https://adjietegaralamsyah312.github.io`<br>dev: `http://localhost:5173,http://127.0.0.1:5173` | Allowlist origin browser, **comma-separated**, tanpa path. Di production wajib memuat origin frontend |
+| `COOKIE_SAME_SITE` | prod: `none`<br>lainnya: `lax` | `lax` \| `strict` \| `none`. `none` wajib saat frontend & API di origin berbeda (lintas situs). Nilai tak dikenal → default |
+| `TRUST_PROXY` | `0` (tidak dipercaya) | **Jumlah hop** proxy yang dipercaya — bukan boolean. `1` di belakang Cloudflare Tunnel. Lihat di bawah |
 | `COOKIE_SECURE` | ikut `NODE_ENV` | `true`/`false`. Kosongkan untuk deploy HTTPS; `false` hanya untuk LAN HTTP |
+| `HOST` | kosong → bind semua interface (`0.0.0.0`) | Alamat bind server. `127.0.0.1` = API hanya bisa diakses lokal (aman di belakang Cloudflare Tunnel: klien LAN tak bisa menyamar sebagai proxy lewat `X-Forwarded-For` palsu). Kosongkan kalau memang butuh API terjangkau dari LAN |
 
-**Kenapa `TRUST_PROXY` default `false`.** Bila `true`, Express mempercayai header
-`X-Forwarded-For` dari pemanggil. Header itu bisa dipalsukan siapa saja, sehingga pembatas
-percobaan login (5 gagal / 15 menit per username+IP) bisa dilewati dengan mengganti nilai
-`X-Forwarded-For` tiap percobaan. Setel `true` **hanya** jika API benar-benar berada di
-belakang reverse proxy yang Anda kendalikan.
+> **Perubahan perilaku (penting).** `server/.env` **sekarang benar-benar dibaca** oleh
+> `npm start` / `npm run dev` (via `node --env-file-if-exists=.env`). Sebelumnya file itu
+> hanya didokumentasikan tapi tidak pernah dimuat, sehingga semua env di tabel ini tidak
+> berefek. Env yang sudah ada di process environment tetap menang atas isi file — dan
+> `npm test` sengaja **tidak** memuat `.env` agar test tidak tercemar.
+>
+> **Invarian cookie:** `SameSite=None` **wajib** berpasangan dengan `Secure=true`. Kalau
+> `COOKIE_SECURE=false` eksplisit, `SameSite` otomatis turun ke `lax` (browser membuang
+> cookie `SameSite=None` tanpa `Secure`).
+
+**`TRUST_PROXY` = jumlah hop, bukan boolean.** Nilainya menyatakan **berapa banyak proxy
+tepercaya** yang ada di depan server: `1` = satu proxy (Cloudflare Tunnel),
+`2` = dua proxy (mis. nginx + cloudflared), `0`/tidak di-set = tidak percaya proxy apa pun
+(default, aman).
+
+> **Jangan pakai nilai boolean `true` untuk `TRUST_PROXY`.** Nilai boolean adalah konsep lama:
+> ia membuat Express mempercayai **seluruh** rantai `X-Forwarded-For`, padahal Cloudflare
+> **menambah** (bukan mengganti) header itu — entri paling kiri adalah nilai kiriman
+> penyerang yang bebas dipalsukan. Akibatnya `req.ip` bisa diganti tiap percobaan dan
+> **pembatas percobaan login** (5 gagal / 15 menit per username+IP) bisa dilewati dengan
+> brute-force tanpa batas. Pakai angka eksplisit (`1`).
+
+Kalau `TRUST_PROXY` tidak di-set: semua klien terlihat **satu IP** (rate-limit jadi satu
+bucket bersama — satu orang yang salah password bisa mengunci login semua orang) dan
+`req.protocol` jadi `http`, sehingga origin API yang dihitung guard CSRF tidak persis
+`https`. Aktifkan **hanya** kalau API benar-benar berada di belakang reverse proxy te—you
+kendalikan. Detail + cara memverifikasi: runbook
+[`specs/deployment-guide.md`](specs/deployment-guide.md) §3.2.
+
+> **`npm start` harus dijalankan dari folder `server/`.** Flag `--env-file-if-exists=.env`
+> bersifat **relatif terhadap direktori kerja**; dijalankan dari root repo, `.env` di
+> `server/` tidak terbaca dan semua pengaturan operator diabaikan diam-diam.
 
 ---
 
@@ -225,7 +254,14 @@ Empat langkah migrasi yang sudah berjalan (`user_version` = 4):
 | v3 | Cabut seluruh `auth_sessions` milik akun yang `is_active = 0` (mencegah "kebangkitan" sesi saat akun diaktifkan kembali) |
 | v4 | Buat baris `business_settings` (id = 1) bila belum ada — tanpa ini seluruh jalur uang (`/settings`, `/sessions/quote`, `/sessions`, `/bookings`) balas 500 di database yang belum di-seed |
 
-### Reset database
+### Reset database (khusus pengembangan — **berbahaya**)
+
+> **Peringatan.** Perintah di bawah **menghapus seluruh data** (akun, transaksi, sesi,
+> laporan). Jalankan **hanya** pada instalasi lokal/dev yang belum dipakai, atau setelah
+> `npm run backup` dan Anda benar-benar ingin mulai dari nol. **Jangan pernah** menjalankannya
+> pada database produksi — jalur deploy ([runbook](specs/deployment-guide.md)) **tidak pernah**
+> me-reset, mengganti password, atau menghapus data. Untuk memulihkan data yang tidak sengaja
+> terhapus, pakai **restore** dari backup (bagian "Backup dan restore"), bukan reset.
 
 ```sh
 cd server
@@ -538,8 +574,106 @@ cd web && npm run build      # menghasilkan web/dist
 cd ../server && npm start    # backend menyajikan web/dist + SPA fallback
 ```
 
+> **Jalankan `npm start` dari folder `server/`.** Flag `--env-file-if-exists=.env` mencari
+> file relatif terhadap direktori kerja; dijalankan dari root repo, `server/.env` **tidak**
+> terbaca dan semua pengaturan (`NODE_ENV`, `CORS_ORIGIN`, `TRUST_PROXY`, …) diam-diam
+> diabaikan.
+
 Saat folder `web/dist` ada, backend menyajikan aset statis dan mengarahkan semua rute non-`/api`
 ke `index.html` (SPA fallback). Jadi mode produksi cukup satu proses di port `4000`.
+
+### Deploy produksi (GitHub Pages + Cloudflare Tunnel)
+
+Arsitektur produksi: frontend statis (React/Vite) dipublikasikan ke **GitHub Pages**, backend
+Node/Express + SQLite tetap jalan di **Termux** dan diekspos lewat **Cloudflare Tunnel**
+(HTTPS). `localhost:5173` **tidak pernah** menjadi alamat publik.
+
+| Komponen | Alamat |
+| --- | --- |
+| Origin frontend | `https://adjietegaralamsyah312.github.io` — halamannya di `https://adjietegaralamsyah312.github.io/PlayRent/` |
+| Origin API | `https://<host-tunnel>` — hostname dari Cloudflare Tunnel (mis. `https://xyz.trycloudflare.com`) |
+
+Env server (`server/.env`) untuk produksi:
+
+```env
+NODE_ENV=production
+PORT=4000
+DB_PATH=./data/playrent.db
+SESSION_TTL_HOURS=12
+CORS_ORIGIN=https://adjietegaralamsyah312.github.io
+COOKIE_SAME_SITE=none
+COOKIE_SECURE=true
+TRUST_PROXY=1
+HOST=127.0.0.1
+```
+
+`TRUST_PROXY=1` dipakai karena ada **satu** reverse proxy tepercaya (Cloudflare Tunnel) di
+depan server — nilainya **jumlah hop**, bukan boolean, dan nilai boolean `true` **tidak boleh
+dipakai** (Cloudflare *menambah* `X-Forwarded-For`, jadi trust-all memakai entri paling kiri
+yang bisa dipalsukan penyerang → rate-limit login bisa dilewati). Lihat catatan env di atas
+dan runbook §3.2.
+
+`HOST=127.0.0.1` dipakai karena API produksi **hanya** diakses lewat Cloudflare Tunnel yang
+jalan **di mesin yang sama** — `cloudflared` tetap bisa menjangkau `http://127.0.0.1:4000`.
+gunanya: port `4000` jadi **tidak terjangkau dari LAN**, sehingga tidak ada klien jaringan
+lokal yang bisa langsung menyamar sebagai proxy dan memalsukan `X-Forwarded-For` (padahal
+`TRUST_PROXY=1` mempercayai satu hop). Konsekuensinya, **HP di Wi-Fi yang sama tidak lagi
+bisa membuka API secara langsung** — memang itu yang diinginkan di mode produksi tunnel
+(aksesnya lewat `https://<host-tunnel>`). Detail + cara membalikkannya: runbook §3.1.
+
+Saat server start, ia mencetak konfigurasi efektifnya di log — periksa baris ini sebelum
+menganggap deploy selesai:
+
+```
+[playrent] listening on http://127.0.0.1:4000 · host=127.0.0.1 · env=production · db=.../server/data/playrent.db
+[playrent] env=production cors=["https://adjietegaralamsyah312.github.io"] sameSite=none secure=true trustProxy=1
+```
+
+`env=production` + `sameSite=none` + `secure=true` + `trustProxy=1` = konfigurasi yang
+benar. Kalau `trustProxy=false`, ada **dua** sebab berbeda dan dibedakan oleh baris
+`PERINGATAN` di log:
+
+- **Tidak ada** `PERINGATAN: TRUST_PROXY="…" tidak dikenal` → nilai `TRUST_PROXY` tidak
+  diaktifkan (barisnya tidak ada di `.env`, atau masih `0`) **atau** `.env` tidak terbaca
+  sama sekali (jarak `--env-file-if-exists` relatif ke cwd → jalankan dari folder `server/`).
+- **Ada** `PERINGATAN: TRUST_PROXY="one" tidak dikenal` → nilai env **salah ketik**
+  (`ture`, `yes`, `on`, `1.5`, …). Set persis `TRUST_PROXY=1`.
+
+Tabel diagnosa lengkap ada di runbook §3.3.
+
+Repository variable GitHub yang **wajib** dibuat (Settings → Secrets and variables → Actions →
+tab **Variables** → New repository variable):
+
+| Nama | Nilai |
+| --- | --- |
+| `VITE_API_BASE_URL` | `https://<host-tunnel>` — origin saja, tanpa trailing slash dan tanpa `/api` |
+
+Nilainya di-inline ke bundle Vite **saat build**, jadi workflow GitHub Actions gagal dengan
+pesan jelas kalau variable itu belum diisi (build lama yang tetap utuh, bukan situs rusak).
+Workflow juga **memverifikasi bahwa origin itu benar-benar ter-inline** ke dalam
+`web/dist/assets` sebelum artifact di-upload — kalau tidak, deploy ditolak.
+Setelah menambah/mengubah variable, jalankan ulang workflow (push ke `main` atau tombol
+**Run workflow**).
+
+### Batasan dukungan browser (login lintas situs)
+
+Frontend produksi berada di `github.io`, API di origin tunnel → cookie sesi harus
+lintas-situs (`SameSite=None; Secure`). Kebijakan cookie pihak ketiga **berbeda per
+browser**, jadi **build sukses tidak menjamin login pasti berhasil**:
+
+- **Chrome / Edge** — phase-out cookie pihak ketiga **dibatalkan** (April 2025), jadi cookie
+  3P masih dikirim; tetapi **Incognito memblokir cookie 3P** dan pengguna bisa mematikannya
+  lewat Settings. Login lintas situs **seharusnya** berhasil (perlu diuji).
+- **Firefox** — cookie 3P **dipartisi** per situs top-level (Total Cookie Protection v102,
+  State Partitioning v103), bukan diblokir. Kemungkinan besar cookie tetap terkirim (perlu
+  diuji).
+- **Safari / WebKit** — memblokir **semua** cookie pihak ketiga (ITP sejak 13.1) tanpa
+  pengecualian, dan Storage Access API tidak berlaku untuk SPA top-level → **login lintas
+  situs diperkirakan GAGAL**. Jalur yang andal: **fallback same-origin** (sajikan SPA dari
+  origin API yang sama) — ini **bukan pelengkap**, tapi jalur andal di Safari.
+
+Audit lengkap (mana yang fakta dan mana yang masih harus diuji), diagnosis cepat, dan
+fallback same-origin ada di runbook §7–§8.
 
 ### Akses dari HP di Wi-Fi yang sama
 
@@ -547,7 +681,14 @@ Cari IP kotak Termux: `ifconfig` atau `ip addr` (alamat pada `wlan0`), mis. `192
 Lalu buka:
 
 - **Dev:** `http://192.168.1.23:5173` — Vite di-bind ke `0.0.0.0`, jadi bisa diakses dari HP.
-- **Mode satu proses:** `http://192.168.1.23:4000` — backend juga listen di semua interface.
+- **Mode satu proses:** `http://192.168.1.23:4000` — backend juga listen di semua interface
+  **asal `HOST` tidak di-set**.
+
+> **Produksi (tunnel) tidak memakai cara ini.** Di produksi `server/.env` sebaiknya berisi
+> `HOST=127.0.0.1` → backend hanya bind loopback, jadi **`http://192.168.1.23:4000` tidak
+> bisa dibuka dari HP**. Itu konsekuensi yang memang diinginkan: dengan `TRUST_PROXY=1`,
+> port yang terbuka ke LAN bisa dipakai memalsukan `X-Forwarded-For`. Di produksi, HP
+> memakai alamat tunnel `https://<host-tunnel>` seperti pengguna lain.
 
 **Jebakan cookie `Secure`.** Di `NODE_ENV=production` cookie sesi diberi flag `Secure`, dan
 browser **membuang** cookie itu bila dikirim lewat HTTP biasa. Gejalanya: login balas `200`,
@@ -899,6 +1040,37 @@ wajib dicek manual sebelum rilis.
 8. **HP tidak bisa membuka `http://<IP>:5173`.** Pastikan HP dan kotak Termux di Wi-Fi yang
    sama, dan Vite menampilkan baris `Network:` saat start. Jika tidak, pastikan
    `server.host: true` masih ada di `web/vite.config.ts`.
+9. **Deploy produksi: login `200` lalu semua request berikutnya `401`.** Cookie sesi lintas
+   situs tidak terkirim. Cek header `Set-Cookie` pada `POST /api/auth/login` — harus memuat
+   `SameSite=None; Secure`. Kalau yang muncul `SameSite=Lax`, berarti `NODE_ENV` belum
+   `production` atau `COOKIE_SECURE` terbaca `false` (nilai `SameSite=None` tanpa `Secure`
+   otomatis diturunkan ke `lax`). Perbaiki `server/.env`, lalu restart server.
+10. **Error CORS di console (deploy produksi).** `CORS_ORIGIN` harus persis
+    `https://adjietegaralamsyah312.github.io` — **tanpa** `/PlayRent`, karena path bukan
+    bagian dari origin — dan respons server harus membawa `Access-Control-Allow-Origin` yang
+    **spesifik** (bukan `*`). Server memang tidak pernah mengirim wildcard; kalau melihat
+    `*`, allowlist-nya tidak cocok dengan origin yang Anda buka.
+11. **Semua request diarahkan ke `github.io/api/...` dan 404.** Repository variable
+    `VITE_API_BASE_URL` belum ter-set, sehingga build memakai path relatif. Set variable-nya
+    (Settings → Secrets and variables → Actions → tab **Variables**), lalu jalankan ulang
+    workflow (push ke `main` atau tombol **Run workflow**) — nilai baru hanya berlaku pada
+    build berikutnya. Workflow sekarang berhenti dengan pesan jelas kalau variable kosong,
+    jadi kalau deploy sempat jalan, itu build lama.
+12. **Workflow gagal: "must be the ORIGIN only" / "must not contain userinfo" / "contains
+    whitespace".** Nilai `VITE_API_BASE_URL` bukan origin murni — masih ada path
+    (`https://host/app`), query (`?x=1`), fragment (`#/x`), userinfo (`https://user@host`),
+    atau spasi/newline. Isi **hanya** `https://<host-tunnel>` (tanpa path, tanpa query, tanpa
+    fragment, tanpa spasi), lalu jalankan ulang workflow.
+13. **`trustProxy=false` di log start.** Dua sebab, dibedakan baris `PERINGATAN`: **tidak ada**
+    `PERINGATAN: TRUST_PROXY="…" tidak dikenal` → nilai `TRUST_PROXY` tidak diaktifkan
+    (baris tidak ada, atau masih `0`) / `.env` tidak terbaca (dijalankan dari luar folder
+    `server/`); **ada** `PERINGATAN: TRUST_PROXY="one" tidak dikenal` → nilai env salah ketik
+    (`ture`, `yes`, `on`, `1.5`). Tabel diagnosa lengkap ada di runbook §3.3. Fix yang umum:
+    `cd server && npm start` dengan `TRUST_PROXY=1` di `server/.env`.
+14. **HP tidak bisa membuka `http://<IP-LAN>:4000`.** `server/.env` berisi `HOST=127.0.0.1`
+    (rekomendasi produksi) → server hanya bind loopback. Itu **memang** yang diinginkan di
+    mode tunnel: port yang terbuka ke LAN bisa dipakai memalsukan `X-Forwarded-For` selama
+    `TRUST_PROXY=1`. Di produksi, HP harus memakai alamat tunnel `https://<host-tunnel>`.
 
 ---
 
@@ -911,9 +1083,14 @@ wajib dicek manual sebelum rilis.
 - **Tidak ada password hardcoded di repo.** `npm run seed` tidak membuat akun; satu-satunya
   jalan membuat Super Admin adalah CLI `npm run admin:bootstrap` (sandinya diinput pemilik,
   tidak pernah dicetak, tidak pernah di-log).
-- **Sesi = cookie `httpOnly`, `SameSite=Lax`** (`Secure` saat `NODE_ENV=production`, kecuali
-  `COOKIE_SECURE=false` untuk LAN HTTP). Token disimpan di DB sebagai `sha256` dan dicari
-  lewat hash.
+- **Sesi = cookie `httpOnly`** dengan `SameSite` **environment-driven**
+  (`COOKIE_SAME_SITE` = `lax` | `strict` | `none`; default `none` di production untuk skenario
+  lintas situs HTTPS, `lax` selain itu) dan flag `Secure` mengikuti `NODE_ENV`
+  (`COOKIE_SECURE=false` hanya untuk LAN HTTP). Token disimpan di DB sebagai `sha256` dan
+  dicari lewat hash — **token sesi tidak pernah keluar di JSON**; satu-satunya pembawa sesi
+  adalah cookie `HttpOnly`. **Pemeriksaan origin CSRF tetap aktif** dan tidak bisa dimatikan
+  lewat env: request tulis dari origin yang tidak diizinkan dijawab `403
+  CSRF_ORIGIN_MISMATCH`.
 - **Otorisasi ditegakkan di server pada setiap route** (`requireAuth` + `requireSuperAdmin`).
   Frontend hanya menyembunyikan UI.
 - **Role hanya dua** (`superadmin` | `user`) dan ditentukan server. Body registrasi yang

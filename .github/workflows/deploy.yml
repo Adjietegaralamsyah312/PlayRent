@@ -38,9 +38,107 @@ jobs:
         working-directory: web
         run: npm run typecheck
 
+      # Fail fast. Vite only inlines VITE_* vars that exist at build time, so a
+      # missing repository variable produces a bundle with RELATIVE /api paths.
+      # From GitHub Pages that resolves to
+      # https://adjietegaralamsyah312.github.io/api/... -> 404 on every call,
+      # i.e. a silently broken deploy. Refuse to build instead, so the previous
+      # deployment stays intact.
+      #
+      # The value must be an ORIGIN and nothing else: scheme://host[:port].
+      # The frontend appends '/api' itself, so a path/query/fragment in the
+      # variable yields 'https://host/app/api/...' -> 404 on every call, and it
+      # still PASSES the "is it inlined?" check below (the string really is in
+      # the bundle). Reject it here instead (review NEW-1).
+      - name: Check VITE_API_BASE_URL repository variable
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          value="$VITE_API_BASE_URL"
+
+          if [ -z "$value" ]; then
+            echo "::error::Repository variable VITE_API_BASE_URL is not set — build aborted, nothing was deployed."
+            echo "::error::Set it at: repo Settings -> Secrets and variables -> Actions -> Variables -> New repository variable -> name 'VITE_API_BASE_URL' -> value 'https://<tunnel-host>' (origin only: no trailing slash, no /api)."
+            exit 1
+          fi
+
+          # Whitespace anywhere (inside or at the edges) is rejected: the value
+          # is baked into the bundle verbatim, so a stray space or newline
+          # would produce an origin no browser can resolve. (We deliberately do
+          # NOT strip it — silently repairing the value would hide the typo.)
+          case "$value" in
+            *[[:space:]]*)
+              echo "::error::VITE_API_BASE_URL='$value' contains whitespace — the origin must be a single token (no spaces, no trailing newline)."
+              exit 1
+              ;;
+          esac
+
+          case "$value" in
+            http://*|https://*) ;;
+            *)
+              echo "::error::VITE_API_BASE_URL='$value' is not a valid origin. Expected something like 'https://<tunnel-host>' (scheme + host, no path)."
+              exit 1
+              ;;
+          esac
+
+          # Everything after the scheme must be host[:port] only.
+          rest="${value#*://}"
+
+          case "$rest" in
+            ''|:*)
+              echo "::error::VITE_API_BASE_URL='$value' has no host."
+              exit 1
+              ;;
+          esac
+
+          case "$rest" in
+            */api|*/api/)
+              echo "::error::VITE_API_BASE_URL='$value' must be the API ORIGIN only — the frontend appends '/api' itself. Drop the trailing '/api'."
+              exit 1
+              ;;
+          esac
+
+          case "$rest" in
+            */*|*\?*|*\#*)
+              echo "::error::VITE_API_BASE_URL='$value' must be the ORIGIN only (scheme://host[:port]) — no path, no query, no fragment. The frontend appends '/api' itself."
+              exit 1
+              ;;
+          esac
+
+          case "$rest" in
+            *@*)
+              echo "::error::VITE_API_BASE_URL='$value' must not contain userinfo ('user@host'). Use the bare origin."
+              exit 1
+              ;;
+          esac
+
+          echo "VITE_API_BASE_URL=$value"
+
       - name: Build website
         working-directory: web
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: npx vite build --base=/PlayRent/
+
+      # The check above only validates the SHAPE of the variable. Vite inlines
+      # VITE_* vars at build time, so a value that never reaches the bundle
+      # (env not exported, code stopped reading import.meta.env, ...) produces
+      # a RELATIVE /api bundle -> every call 404s on github.io. Grep the built
+      # assets for the origin and refuse to publish if it is not there.
+      - name: Verify API origin is inlined
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          if [ -z "$VITE_API_BASE_URL" ]; then
+            echo "::error::VITE_API_BASE_URL is empty — cannot verify the bundle. Nothing was deployed."
+            exit 1
+          fi
+          if ! grep -rqF -- "$VITE_API_BASE_URL" dist/assets; then
+            echo "::error::VITE_API_BASE_URL was not inlined into the bundle — the deployed site would call github.io/api/... and 404."
+            exit 1
+          fi
+          echo "API origin inlined: $VITE_API_BASE_URL"
 
       - name: SPA fallback
         run: cp web/dist/index.html web/dist/404.html

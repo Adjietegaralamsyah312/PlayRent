@@ -1,6 +1,6 @@
 // Auth: scrypt password hashing, opaque session tokens, middleware, rate limit, CSRF.
 import { scryptSync, randomBytes, createHash, timingSafeEqual } from 'node:crypto'
-import { sessionTtlHours, cookieSecure, corsOrigin } from '../config.js'
+import { sessionTtlHours, cookieSecure, cookieSameSite, corsOrigins } from '../config.js'
 import { AppError } from './errors.js'
 import { nowIso, addMinutes } from './time.js'
 
@@ -94,18 +94,34 @@ export function revokeAllForUser(db, userId, { keepToken = null } = {}) {
 
 // --- cookie -----------------------------------------------------------------
 
-const cookieOpts = (maxAgeMs) => {
-  const o = { httpOnly: true, sameSite: 'lax', secure: cookieSecure, path: '/' }
-  if (maxAgeMs != null) o.maxAge = maxAgeMs
-  return o
+/**
+ * Session cookie attributes (deploy contract §2).
+ * - httpOnly is always true: the token never leaves the browser via JS.
+ * - no `domain`: host-only is enough for a cookie set by the API origin.
+ * - invariant: SameSite=None is only honoured together with Secure — a browser
+ *   silently drops a `SameSite=None` cookie that is not Secure, so a
+ *   plain-HTTP deploy falls back to `lax` instead of losing the session.
+ */
+export function sessionCookieOptions() {
+  const secure = cookieSecure()
+  const requested = cookieSameSite()
+  return {
+    httpOnly: true,
+    sameSite: !secure && requested === 'none' ? 'lax' : requested,
+    secure,
+    path: '/',
+  }
 }
 
 export function setSessionCookie(res, token, expiresAt) {
-  res.cookie(COOKIE_NAME, token, cookieOpts(Math.max(0, Date.parse(expiresAt) - Date.now())))
+  const maxAge = Math.max(0, Date.parse(expiresAt) - Date.now())
+  res.cookie(COOKIE_NAME, token, { ...sessionCookieOptions(), maxAge })
 }
 
 export function clearSessionCookie(res) {
-  res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'lax', secure: cookieSecure, path: '/' })
+  // Identical attributes to setSessionCookie, otherwise the browser keeps the
+  // old cookie and the session survives logout.
+  res.clearCookie(COOKIE_NAME, sessionCookieOptions())
 }
 
 // --- middleware -------------------------------------------------------------
@@ -131,13 +147,28 @@ export function requireSuperAdmin(req, res, next) {
   next()
 }
 
-/** Belt-and-braces CSRF: SameSite=Lax is primary; this rejects foreign Origins on writes. */
+/**
+ * Belt-and-braces CSRF: the SameSite cookie is the primary defence; this
+ * rejects foreign Origins on writes. Allowed = the CORS allowlist + the API's
+ * own origin (so a same-origin SPA keeps working without extra config).
+ * Never disableable by env — a foreign Origin on a write is always a 403.
+ *
+ * A write without an Origin header is not automatically trusted: browsers
+ * always send Sec-Fetch-Site, so 'cross-site' there means a cross-site write
+ * (the Origin header was stripped or never sent) and is rejected with the
+ * same code. 'same-origin' / 'same-site' / no header at all is allowed —
+ * non-browser clients (curl, Postman) send neither header.
+ */
 export function csrfGuard(req, res, next) {
   const m = req.method
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return next()
   const origin = req.get('origin')
-  if (!origin) return next()
-  const allowed = new Set([corsOrigin, 'http://127.0.0.1:5173'])
+  if (!origin) {
+    const site = (req.get('sec-fetch-site') || '').trim().toLowerCase()
+    if (site === 'cross-site') throw new AppError(403, 'CSRF_ORIGIN_MISMATCH')
+    return next()
+  }
+  const allowed = new Set(corsOrigins())
   const host = req.get('host')
   if (host) allowed.add(`${req.protocol}://${host}`)
   if (!allowed.has(origin)) throw new AppError(403, 'CSRF_ORIGIN_MISMATCH')

@@ -5,8 +5,8 @@
   "type": "module",
   "description": "PlayRent API — Express 5 + node:sqlite, no native deps",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --env-file-if-exists=.env --watch src/index.js",
     "seed": "node src/seed.js",
     "seed:schema": "node src/seed-schema.js",
     "admin:bootstrap": "node src/admin-bootstrap.js",

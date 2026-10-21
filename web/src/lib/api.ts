@@ -52,11 +52,28 @@ function buildQuery(query?: RequestOptions['query']): string {
   return s ? `?${s}` : '';
 }
 
+/**
+ * Origin of the API, baked in at build time (specs/deploy-contract.md §1.1).
+ * - unset/empty → '' → relative `/api/...` → Vite dev proxy → 127.0.0.1:4000.
+ * - set        → absolute cross-site origin (Pages → Cloudflare Tunnel).
+ * Trailing slashes are stripped so `https://host/` and `https://host` behave the same.
+ */
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '');
+
+/**
+ * URL for an API path (given WITHOUT the `/api` prefix).
+ * Absolute when an API origin is configured, relative otherwise.
+ */
+export function apiUrl(path: string): string {
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}/api${suffix}`;
+}
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query, skipAuthRedirect } = opts;
   let res: Response;
   try {
-    res = await fetch(`/api${path}${buildQuery(query)}`, {
+    res = await fetch(apiUrl(`${path}${buildQuery(query)}`), {
       method,
       credentials: 'include',
       headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
@@ -202,7 +219,7 @@ export const transactions = {
     request<{ transaction: Transaction; items: TransactionItem[]; session: RentalSession | null; cashier: User | null; console: ConsoleUnit | null }>(`/transactions/${id}`),
   void: (id: Id, reason: string) =>
     request<{ transaction: Transaction }>(`/transactions/${id}/void`, { method: 'POST', body: { reason } }),
-  receiptUrl: (id: Id, opts?: { print?: boolean }) => `/api/transactions/${id}/receipt?format=html${opts?.print ? '&print=1' : ''}`,
+  receiptUrl: (id: Id, opts?: { print?: boolean }) => apiUrl(`/transactions/${id}/receipt?format=html${opts?.print ? '&print=1' : ''}`),
 };
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
@@ -252,7 +269,7 @@ export const reports = {
   units: (q?: { from?: string; to?: string }) => request<{ items: UnitReport[] }>('/reports/units', { query: q }),
   payments: (q?: { from?: string; to?: string; method?: string; status?: string }) =>
     request<PaymentsReport>('/reports/payments', { query: q }),
-  exportCsvUrl: (q: { type: ReportCsvType; from?: string; to?: string }) => `/api/reports/export.csv${buildQuery(q)}`,
+  exportCsvUrl: (q: { type: ReportCsvType; from?: string; to?: string }) => apiUrl(`/reports/export.csv${buildQuery(q)}`),
 };
 
 // ── Settings + packages ─────────────────────────────────────────────────────

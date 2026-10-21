@@ -2,8 +2,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { withServer, ADMIN, USER } from './helpers.js'
+import { sessionCookieOptions } from '../src/lib/auth.js'
 
-test('O1 login: bad credentials are generic, good credentials set an httpOnly Lax cookie', async () => {
+test('O1 login: bad credentials are generic, good credentials set an httpOnly cookie', async () => {
   await withServer(async ({ api, db }) => {
     const bad = await api('/api/auth/login', { method: 'POST', body: { username: 'admin', password: 'nope' } })
     assert.equal(bad.status, 401)
@@ -19,8 +20,15 @@ test('O1 login: bad credentials are generic, good credentials set an httpOnly La
     assert.equal(ok.status, 200)
     const raw = ok.setCookie.find((c) => c.startsWith('pr_session='))
     assert.ok(raw, 'session cookie set')
+    // Config-aware: the attributes follow server/src/config.js, not a hardcoded
+    // string, so a default change (e.g. SameSite=None in production) does not
+    // break this test.
+    const opts = sessionCookieOptions()
     assert.match(raw, /HttpOnly/i)
-    assert.match(raw, /SameSite=Lax/i)
+    assert.match(raw, new RegExp(`SameSite=${opts.sameSite}`, 'i'))
+    assert.equal(/;\s*Secure/i.test(raw), opts.secure)
+    assert.match(raw, /Path=\//i)
+    assert.ok(!/;\s*Domain=/i.test(raw), 'host-only cookie')
     assert.equal(ok.body.data.user.role, 'superadmin')
     assert.ok(!JSON.stringify(ok.body).includes('password'), 'password never returned')
 

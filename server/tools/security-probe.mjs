@@ -137,7 +137,7 @@ async function main() {
       const r = await api('/api/auth/login', { method: 'POST', headers: { ...jsonHeaders, 'x-forwarded-for': `10.0.0.${i}` }, body: { username: 'spoof', password: 'wrong' } })
       if (r.status === 429) spoofLimited = true
     }
-    record('AUTH-10', 'major', spoofLimited, 'server/src/routes/auth.js:15', 'rate limit key = caller-supplied X-Forwarded-For → unlimited brute force', `8 attempts, each a fresh XFF, 429 seen=${spoofLimited}`, 'key on req.ip with app.set("trust proxy", false) unless TRUST_PROXY=true')
+    record('AUTH-10', 'major', spoofLimited, 'server/src/routes/auth.js:15', 'rate limit key = caller-supplied X-Forwarded-For → unlimited brute force', `8 attempts, each a fresh XFF, 429 seen=${spoofLimited}`, 'key on req.ip; app.set("trust proxy", trustProxy()) — TRUST_PROXY is a HOP COUNT (false = ignore XFF, 1 = trust the entry the proxy appended)')
 
     // 1h. case/whitespace variance on the username key
     const v1 = await api('/api/auth/login', { method: 'POST', headers: { ...jsonHeaders, 'x-forwarded-for': '9.9.9.9' }, body: { username: 'Kasir', password: 'kasir123' } })
@@ -156,7 +156,7 @@ async function main() {
     `const c = await import('${join(here, '..', 'src', 'config.js').replace(/\\/g, '/')}'); console.log(JSON.stringify({ isProd: c.isProd }))`,
   ], { env: { ...process.env, NODE_ENV: 'production' }, encoding: 'utf8' })
   const isProd = JSON.parse(prod.trim()).isProd
-  record('AUTH-14', 'major', isProd === true, 'server/src/lib/auth.js:88', 'cookie.secure = isProd (config.isProd true when NODE_ENV=production)', `child isProd=${isProd}; cookieOpts sets secure:isProd`, 'ok')
+  record('AUTH-14', 'major', isProd === true, 'server/src/config.js:cookieSecure() + server/src/lib/auth.js:sessionCookieOptions()', 'cookie.secure = cookieSecure() (config.isProd true when NODE_ENV=production)', `child isProd=${isProd}; sessionCookieOptions() sets secure:cookieSecure()`, 'ok')
 
   // ───────────────────────── 2. INJECTION ─────────────────────────
   await withServer(async ({ db, api, login }) => {

@@ -2,10 +2,28 @@
 
 Panduan singkat untuk Super Admin (operator). Sekitar 5 menit baca. Tidak perlu paham teknis.
 
-**Buka aplikasi:** `http://localhost:5173` (atau alamat yang diberikan pemilik usaha).
+**Buka aplikasi:** `https://adjietegaralamsyah312.github.io/PlayRent/` (alamat produksi).
+Selama masih developing, alamatnya `http://localhost:5173` (atau alamat yang diberikan pemilik
+usaha).
 **Masuk:** username dan kata sandi Super Admin Anda. Tidak ada kata sandi bawaan — akun
 pertama dibuat pemilik usaha lewat perintah `npm run admin:bootstrap`. Kalau lupa, lihat
 bagian **Kalau lupa password Super Admin** di bawah.
+
+> **Catatan untuk pemilik usaha:** kalau setelah login tidak bisa masuk (login berhasil tapi
+> langsung diminta login lagi, atau muncul pesan error di browser), itu **biasanya bukan salah
+> password** — kemungkinan besar browser memblokir cookie dari situs lain, karena aplikasi
+> ini dibuka dari `github.io` sedangkan server-nya ada di alamat lain.
+>
+> - Di **Chrome/Edge/Firefox** login lintas situs **seharusnya** berhasil — tapi gagal juga
+>   kalau memakai **jendela Incognito/privat**, atau kalau Anda (atau kebijakan kantor)
+>   memblokir "third-party cookies".
+> - Di **Safari (iPhone/iPad/Mac)** cookie pihak ketiga diblokir **penuh**, jadi login dari
+>   `github.io` **diprediksi gagal**. Solusinya bukan mengubah password, tapi menyajikan
+>   aplikasi dari alamat yang sama dengan server (mode *fallback same-origin*) sehingga
+>   cookie jadi milik situs itu sendiri.
+>
+> Hubungi pemilik usaha untuk menjalankan solusinya. Detail teknisnya ada di runbook
+> [`specs/deployment-guide.md`](../specs/deployment-guide.md) §7–§8.
 
 ---
 
@@ -30,7 +48,8 @@ npm run admin:bootstrap  # 2. buat akun Super Admin (password Anda sendiri)
 > sehingga unit itu tidak bisa disewakan.
 
 Kalau ini pertama kalinya dan Anda ingin **melihat** aplikasi berisi contoh, `npm run seed`
-boleh dipakai — tapi database itu harus di-reset sebelum dipakai untuk transaksi nyata.
+boleh dipakai — tapi data demo itu harus dibuang (file basis data di-reset) **sebelum** dipakai
+untuk transaksi nyata, dan **hanya** kalau belum ada transaksi sungguhan yang perlu disimpan.
 
 ---
 
@@ -164,6 +183,8 @@ npm run admin:bootstrap -- --force
   ganda. Ikuti prompt: username (tekan Enter untuk memakai yang ada) dan sandi baru
   (minimal 8 karakter).
 - Akun jadi aktif lagi dan semua sesi lama akun tersebut dihentikan.
+- **Riwayat transaksi, unit, dan laporan tidak ikut terhapus** — yang dicabut hanya sesi
+  login lama.
 - Sesudah itu, login lagi di `/masuk` dengan sandi baru.
 
 > Ini perintah **pemilik/operator** yang punya akses ke server — bukan fitur pelanggan, dan
@@ -202,8 +223,9 @@ akun Super Admin.
 | Masalah | Yang dilakukan |
 | --- | --- |
 | Tidak bisa login | Pastikan username & kata sandi benar; setelah 5 kali gagal salah, tunggu 15 menit. |
+| Login berhasil tapi langsung diminta login lagi | Browser memblokir cookie dari situs lain (di Safari ini yang terjadi). Pakai mode *fallback same-origin* — hubungi pemilik usaha (catatan di atas). |
 | Dashboard & laporan kosong semua | Basis data belum disiapkan. Dari folder `server/`, jalankan `npm run seed:schema` lalu jalankan ulang server (bagian 0). |
-| Laporan berisi pendapatan yang tidak pernah terjadi | Basis data diisi seeder demo. Hentikan server, hapus `server/data/playrent.db` (beserta `-wal`/`-shm`), lalu jalankan `npm run seed:schema` dan `npm run admin:bootstrap` ulang. **Hapus backup lama juga** kalau tidak mau ribet. |
+| Laporan berisi pendapatan yang tidak pernah terjadi | Basis data diisi seeder demo (`npm run seed`). **Jangan hapus datanya.** Hentikan server, **simpan** salinan `server/data/playrent.db` (beserta `-wal`/`-shm`) sebagai cadangan, lalu minta pemilik usaha menyiapkan basis data bersih dengan `npm run seed:schema` (tanpa data demo) dan `npm run admin:bootstrap` lagi. |
 | Lupa sandi Super Admin | Reset dari terminal: `npm run admin:bootstrap -- --force` (bagian 8). |
 | Terlempar ke halaman login | Sesi kedaluwarsa. Login lagi — data tidak hilang. |
 | Tombol Mulai sesi ditolak | Unit sedang dipakai/dipesan orang lain. Pilih unit lain. |

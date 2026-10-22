@@ -28,7 +28,6 @@ secara manual oleh Super Admin**; status "terbayar" adalah catatan manusia, buka
 gateway. Struk dibuat sebagai HTML yang bisa dicetak lewat fitur print browser, bukan file PDF
 yang dihasilkan server.
 
----
 
 ## Arsitektur sistem
 
